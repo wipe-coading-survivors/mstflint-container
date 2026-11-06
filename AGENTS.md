@@ -2,8 +2,8 @@
 
 Репозиторий-компаньон mlxini: собирает образ `mstflint`
 (upstream Mellanox/mstflint по SHA-пину + наша патч-серия
-4.37.0-1.x). Ремоут github — только через PR: прямой пуш в master
-авто-ревертит master-guard.
+4.37.0-1.x). Пуш в master на GitHub — только через PR (master-guard
+авто-ревертит прямой пуш): ветка → PR → merge.
 
 ## Кодовые правила
 

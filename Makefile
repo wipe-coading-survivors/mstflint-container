@@ -8,11 +8,12 @@ endif
 
 MSTFLINT_IMAGE ?= mstflint
 MSTFLINT_TAG ?= v4.37.0-1.3
-MSTFLINT_VERSION := $(patsubst v%,%,$(MSTFLINT_TAG))
 MSTFLINT_SHA := 1b8ac4b520390563ff0822d472a54895d033d143
 MSTFLINT_CTX ?= build/mstflint-ctx
 
 -include local.mk
+
+MSTFLINT_VERSION := $(patsubst v%,%,$(MSTFLINT_TAG))
 
 .PHONY: image mstflint-ctx mstflint-image mstflint-deploy
 
