@@ -1,0 +1,97 @@
+diff --git a/efuse/efuse.cpp b/efuse/efuse.cpp
+index 77255a3..fb6a62c 100644
+--- a/efuse/efuse.cpp
++++ b/efuse/efuse.cpp
+@@ -36,6 +36,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <cstdint>
+ #include <vector>
+@@ -57,6 +58,9 @@
+ 
+ static std::string resolve_efuse_config_path()
+ {
++    const char* dataPath = getenv("MSTFLINT_DATA_PATH");
++    if (dataPath)
++        return std::string(dataPath) + "/efuse/" + EFUSE_CONFIG_FILENAME;
+     return std::string(DATA_PATH) + "/" + EFUSE_CONFIG_FILENAME;
+ }
+ 
+diff --git a/mlxconfig/mlxcfg_commander.cpp b/mlxconfig/mlxcfg_commander.cpp
+index 7799097..7628b37 100644
+--- a/mlxconfig/mlxcfg_commander.cpp
++++ b/mlxconfig/mlxcfg_commander.cpp
+@@ -37,6 +37,7 @@
+  *      Author: ahmads
+  */
+ 
++#include <cstdlib>
+ #include <set>
+ #include <mtcr.h>
+ #include "mlxcfg_generic_commander.h"
+@@ -175,7 +176,10 @@ string Commander::getDefaultDBName(bool isSwitchPrmDb)
+     dbPathName = dbPathName.substr(0, dbPathName.rfind("\\") + 1);
+     dbPathName += dbDirName + "\\" + dbFileName;
+ #elif defined MST_UL
+-    dbPathName = DATA_PATH "/" + dbDirName + "/" + dbFileName;
++    const char* dataPath = getenv("MSTFLINT_DATA_PATH");
++    if (!dataPath)
++        dataPath = DATA_PATH;
++    dbPathName = std::string(dataPath) + "/" + dbDirName + "/" + dbFileName;
+ #else
+     char line[1024] = {0};
+     string confFile = string(ROOT_PATH) + string("etc/mft/mft.conf");
+diff --git a/mstdump/crd_lib/crdump.c b/mstdump/crd_lib/crdump.c
+index 852cc1d..0cba2cd 100644
+--- a/mstdump/crd_lib/crdump.c
++++ b/mstdump/crd_lib/crdump.c
+@@ -43,6 +43,7 @@
+ #include <ctype.h>
+ #include <compatibility.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <tools_layouts/reg_access_switch_layouts.h>
+ #include <reg_access/reg_access.h>
+ #include <mft_utils/mft_sig_handler.h>
+@@ -1021,7 +1022,13 @@ static int crd_update_csv_path(IN OUT char* csv_file_path, IN const char* db_pat
+ 
+ #elif defined MST_UL
+     (void)db_path;
+-    strcat(csv_file_path, DATA_PATH "/");
++    {
++        const char* dataPath = getenv("MSTFLINT_DATA_PATH");
++        if (!dataPath)
++            dataPath = DATA_PATH;
++        strcat(csv_file_path, dataPath);
++        strcat(csv_file_path, "/");
++    }
+     found = 1;
+ 
+ #else
+diff --git a/tools_layouts/prm_adb_db.cpp b/tools_layouts/prm_adb_db.cpp
+index 867df10..f323f74 100644
+--- a/tools_layouts/prm_adb_db.cpp
++++ b/tools_layouts/prm_adb_db.cpp
+@@ -38,6 +38,7 @@
+  */
+ 
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <stdarg.h>
+ #include "prm_adb_db.h"
+ #include "compatibility.h"
+@@ -116,7 +117,10 @@ string PrmAdbDB::getDefaultDBName(PrmAdbType_t adbType, const string& dbFileName
+     dbPathName = dbPathName.substr(0, dbPathName.rfind("\\") + 1);
+     dbPathName += dbDirName + "\\" + adbTypeStr + "\\ext\\" + dbFileName;
+ #elif defined MST_UL
+-    dbPathName = DATA_PATH "/" + dbDirName + "/" + adbTypeStr + "/ext/" + dbFileName;
++    const char* dataPath = getenv("MSTFLINT_DATA_PATH");
++    if (!dataPath)
++        dataPath = DATA_PATH;
++    dbPathName = std::string(dataPath) + "/" + dbDirName + "/" + adbTypeStr + "/ext/" + dbFileName;
+ #else
+     char   line[1024] = {0};
+     string confFile = string(ROOT_PATH) + string("etc/mft/mft.conf");

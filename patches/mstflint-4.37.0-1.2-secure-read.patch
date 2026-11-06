@@ -1,0 +1,89 @@
+diff --git a/mlxfwops/lib/fsctrl_ops.cpp b/mlxfwops/lib/fsctrl_ops.cpp
+index d0f6346..c2d366a 100644
+--- a/mlxfwops/lib/fsctrl_ops.cpp
++++ b/mlxfwops/lib/fsctrl_ops.cpp
+@@ -544,12 +544,41 @@ bool FsCtrlOperations::FwVerifyAdv(ExtVerifyParams& verifyParams)
+     return true;
+ }
+ 
++void FsCtrlOperations::SecureReadNotice(const char* op)
++{
++    if (_fsCtrlImgInfo.security_mode & SMM_SECURE_FW)
++    {
++        fprintf(stderr, "-W- mlxini secure-read: %s read served via MCC (Secure FW)\n", op);
++    }
++}
++
+ bool FsCtrlOperations::FwReadData(void* image, u_int32_t* image_size, bool verbose)
+ {
+-    (void)image;
+-    (void)image_size;
+     (void)verbose;
+-    return errmsg("Read image is not supported");
++    if (image_size == NULL)
++    {
++        return errmsg("bad parameter is given to FwReadData\n");
++    }
++    SecureReadNotice("image");
++    if (_bootImgCache.empty())
++    {
++        if (_fsCtrlImgInfo.security_mode & SMM_SECURE_FW)
++        {
++            printf("-I- full image read via MCC may take minutes\n");
++        }
++        if (!ReadMccComponent(_bootImgCache, FwComponent::COMPID_BOOT_IMG, NULL))
++        {
++            return errmsg("%s", err());
++        }
++    }
++    if (image == NULL)
++    {
++        *image_size = _bootImgCache.size();
++        return true;
++    }
++    memcpy(image, _bootImgCache.data(), _bootImgCache.size());
++    *image_size = _bootImgCache.size();
++    return true;
+ }
+ 
+ bool FsCtrlOperations::ReadMccComponent(vector<u_int8_t>& componentRawData, FwComponent::comps_ids_t component, ProgressCallBackAdvSt* stProgressFunc)
+@@ -1078,10 +1107,17 @@ bool FsCtrlOperations::FwSetVPD(char* vpdFileStr, PrintCallBack callBackFunc)
+ 
+ bool FsCtrlOperations::FwGetSection(u_int32_t sectType, std::vector<u_int8_t>& sectInfo, bool stripedImage)
+ {
+-    (void)sectInfo;
+-    (void)sectType;
+-    (void)stripedImage;
+-    return unsupportedOperation();
++    SecureReadNotice("section");
++    unique_ptr<FwOperations> imageOps = NULL;
++    if (!_createImageOps(imageOps))
++    {
++        return errmsg("%s", err());
++    }
++    if (!imageOps->FwGetSection(sectType, sectInfo, stripedImage))
++    {
++        return errmsg("%s", imageOps->err());
++    }
++    return true;
+ }
+ 
+ bool FsCtrlOperations::FwResetNvData()
+diff --git a/mlxfwops/lib/fsctrl_ops.h b/mlxfwops/lib/fsctrl_ops.h
+index 3b7bce4..1dc1a01 100644
+--- a/mlxfwops/lib/fsctrl_ops.h
++++ b/mlxfwops/lib/fsctrl_ops.h
+@@ -144,6 +144,7 @@ private:
+     bool GetImageInfo(u_int8_t* buff);
+ 
+     bool unsupportedOperation();
++    void SecureReadNotice(const char* op);
+     int FwCompsErrToFwOpsErr(fw_comps_error_t err);
+     virtual bool VerifyAllowedParams(ExtBurnParams& burnParams, bool isSecure);
+     bool BadParamErrMsg(const char* unSupportedOperation, bool isSecure);
+@@ -172,4 +173,5 @@ private:
+     FwCompsMgr* _fwCompsAccess;
+     bool _isSecured;
+     u_int32_t _hwDevId;
++    std::vector<u_int8_t> _bootImgCache;
+ };
