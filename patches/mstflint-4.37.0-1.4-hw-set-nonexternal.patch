@@ -1,0 +1,13 @@
+diff --git a/flint/Makefile.am b/flint/Makefile.am
+index 22e17f3..9433930 100644
+--- a/flint/Makefile.am
++++ b/flint/Makefile.am
+@@ -54,7 +54,7 @@ mstflint_SOURCES = \
+     subcommands.h \
+     subcommands_linkx.cpp
+ 
+-mstflint_CXXFLAGS = -Wall -pthread -W -g -MP -MD -pipe -DEXTERNAL $(COMPILER_FPIC) \
++mstflint_CXXFLAGS = -Wall -pthread -W -g -MP -MD -pipe $(COMPILER_FPIC) \
+                     -DUNIX -DOS_UNIX -DOS_LINUX
+ 
+ 

@@ -7,7 +7,7 @@ HOSTCURDIR := $(CURDIR)
 endif
 
 MSTFLINT_IMAGE ?= mstflint
-MSTFLINT_TAG ?= v4.37.0-1.3
+MSTFLINT_TAG ?= v4.37.0-1.4
 MSTFLINT_SHA := 1b8ac4b520390563ff0822d472a54895d033d143
 MSTFLINT_CTX ?= build/mstflint-ctx
 
@@ -35,6 +35,7 @@ mstflint-ctx:
 	cp docker/mstflint.containerfile $(MSTFLINT_CTX)/
 	cp patches/mstflint-4.37.0-1.1-data-path-env.patch $(MSTFLINT_CTX)/mstflint-data-path-env.patch
 	cp patches/mstflint-4.37.0-1.3-secure-read-flag.patch $(MSTFLINT_CTX)/mstflint-secure-read-flag.patch
+	cp patches/mstflint-4.37.0-1.4-hw-set-nonexternal.patch $(MSTFLINT_CTX)/mstflint-hw-set-nonexternal.patch
 	cp scripts/mft-stage.sh $(MSTFLINT_CTX)/mft-stage.sh
 	cp docker/mstflint-icon.png $(MSTFLINT_CTX)/mstflint-icon.png
 

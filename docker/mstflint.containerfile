@@ -16,6 +16,7 @@ RUN dnf install -y autoconf automake libtool gcc gcc-c++ make \
 COPY mstflint /src/mstflint
 COPY mstflint-data-path-env.patch /src/mstflint-data-path-env.patch
 COPY mstflint-secure-read-flag.patch /src/mstflint-secure-read-flag.patch
+COPY mstflint-hw-set-nonexternal.patch /src/mstflint-hw-set-nonexternal.patch
 COPY mft-stage.sh /opt/mft-stage.sh
 COPY mstflint-icon.png /opt/mstflint-icon.png
 
@@ -25,6 +26,10 @@ COPY mstflint-icon.png /opt/mstflint-icon.png
 # gated behind the --mcc_read flag, plus the secure-FW slow-path hint.
 # The grep gates below pin both the MCC-read wiring and the flag/hint,
 # so a silent drop of either fails the build.
+# mstflint-hw-set-nonexternal.patch (-1.4) drops -DEXTERNAL from the flint
+# target in flint/Makefile.am: registers hw [query/set], set_vpd and other
+# non-EXTERNAL subcommands. Gates: the non-EXTERNAL hw help branch must be
+# present in the tree and -DEXTERNAL must be gone from flint/Makefile.am.
 RUN cd /src/mstflint \
     && patch -p1 < /src/mstflint-data-path-env.patch \
     && grep -q "MSTFLINT_DATA_PATH" mlxconfig/mlxcfg_commander.cpp \
@@ -37,6 +42,9 @@ RUN cd /src/mstflint \
     && grep -q "served via MCC" mlxfwops/lib/fsctrl_ops.cpp \
     && grep -q "mcc_read" flint/cmd_line_parser.cpp \
     && grep -q "_mccRead" mlxfwops/lib/fsctrl_ops.h \
+    && patch -p1 < /src/mstflint-hw-set-nonexternal.patch \
+    && grep -q "Set/query HW info" flint/subcommands.cpp \
+    && ! grep -q -- "-DEXTERNAL" flint/Makefile.am \
     && ./autogen.sh \
     && CFLAGS="-O2 -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types" \
         CXXFLAGS="-O2 -Wno-error" \
