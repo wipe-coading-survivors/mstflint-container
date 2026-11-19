@@ -14,7 +14,9 @@
  *     (the observable stub boundary, canon 100-protocol §8.6).
  *   - geteuid(): reports 0 — mopen_ul refuses non-root opens with EACCES
  *     before any device access (mtcr_ul_com.c), which would kill every
- *     capture scenario at startup.
+ *     capture scenario at startup. The override is process-global:
+ *     every geteuid() caller in the preloaded process sees 0, not just
+ *     mopen_ul.
  *
  * Environment:
  *   I2C_CAPTURE_LOG=<path>  capture log (append; default: stderr)
@@ -187,14 +189,11 @@ static int open_common(const char *caller, const char *path, int flags,
                        mode_t mode, int has_mode)
 {
     static int (*real_open)(const char *, int, ...);
-    static int (*real_openat)(int, const char *, int, ...);
     int fd;
 
     if (!real_open)
         real_open = dlsym(RTLD_NEXT, "open");
-    if (!real_openat)
-        real_openat = dlsym(RTLD_NEXT, "openat");
-    if (!real_open || !real_openat)
+    if (!real_open)
         return -1;
 
     if (is_i2c_path(path)) {
