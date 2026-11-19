@@ -30,6 +30,11 @@ COPY mstflint-icon.png /opt/mstflint-icon.png
 # target in flint/Makefile.am: registers hw [query/set], set_vpd and other
 # non-EXTERNAL subcommands. Gates: the non-EXTERNAL hw help branch must be
 # present in the tree and -DEXTERNAL must be gone from flint/Makefile.am.
+# --enable-i2c (mtusb-i2c-re cycle): compile the mtcr i2c backend
+# (-DENABLE_MST_DEV_I2C) so /dev/i2c-N devices are supported (configure.ac
+# default is no). The grep gate below fails the build if the backend is
+# silently dropped: the /dev/i2c literal exists in the tree only inside the
+# ENABLE_MST_DEV_I2C ifdef in mtcr_ul/mtcr_ul_com.c (mtcr_parse_name).
 RUN cd /src/mstflint \
     && patch -p1 < /src/mstflint-data-path-env.patch \
     && grep -q "MSTFLINT_DATA_PATH" mlxconfig/mlxcfg_commander.cpp \
@@ -49,9 +54,10 @@ RUN cd /src/mstflint \
     && CFLAGS="-O2 -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types" \
         CXXFLAGS="-O2 -Wno-error" \
         MSTFLINT_VERSION_STR="mstflint ${MSTFLINT_TAG#v}" \
-        ./configure --prefix=/usr/local --enable-adb-generic-tools \
+        ./configure --prefix=/usr/local --enable-adb-generic-tools --enable-i2c \
     && make -j"$(nproc)" \
     && make install \
+    && grep -aq -- '/dev/i2c' /usr/local/bin/mstflint \
     && test -d /usr/local/share/mstflint/prm_dbs/hca/ext \
     && test "$(/usr/local/bin/mstflint --version | grep -o 'Git SHA Hash: [0-9a-f]\+')" = "Git SHA Hash: ${MSTFLINT_SHA}" \
     && rm -rf /src/mstflint
