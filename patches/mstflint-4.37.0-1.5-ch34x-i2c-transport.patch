@@ -24,6 +24,386 @@ index 4702772..da3323b 100644
      enum Mdevs_t flags;
      u_int32_t    connectx_wa_slot; /* apply connectx cr write workaround */
      int          connectx_wa_last_op_write;
+diff --git a/mtcr_ul/Makefile.am b/mtcr_ul/Makefile.am
+index ef3c0b9..1955e44 100644
+--- a/mtcr_ul/Makefile.am
++++ b/mtcr_ul/Makefile.am
+@@ -78,3 +78,7 @@ libraryinclude_HEADERS = $(top_srcdir)/include/mtcr_ul/mtcr.h  $(top_srcdir)/inc
+ install-exec-hook:
+ 	rm -f $(DESTDIR)$(pkglibdir)/libmtcr_ul.so* $(DESTDIR)$(pkglibdir)/libmtcr_ul.la
+ 	ln -snf mstflint/libmtcr_ul.a $(DESTDIR)$(libdir)/libmtcr_ul.a
++
++bin_PROGRAMS = ch34x_frames
++
++ch34x_frames_SOURCES = ch34x_frames.c
+diff --git a/mtcr_ul/ch34x_frames.c b/mtcr_ul/ch34x_frames.c
+new file mode 100644
+index 0000000..2ea0669
+--- /dev/null
++++ b/mtcr_ul/ch34x_frames.c
+@@ -0,0 +1,362 @@
++#include <stdio.h>
++#include <string.h>
++
++#define CH34X_CMD_STREAM 0xAA
++#define CH34X_STM_STA    0x74
++#define CH34X_STM_STO    0x75
++#define CH34X_STM_OUT    0x80
++#define CH34X_STM_IN     0xC0
++#define CH34X_STM_SET    0x60
++#define CH34X_STM_END    0x00
++
++#define CH34X_STM_N_MAX  0x3F
++
++#define CH34X_MAX_FRAMES 8
++#define CH34X_FRAME_MAX  64
++
++#define CH34X_I2C_SLAVE  0x48
++
++typedef struct {
++    unsigned char b[CH34X_FRAME_MAX];
++    unsigned len;
++} ch34x_frame_t;
++
++typedef struct {
++    ch34x_frame_t f[CH34X_MAX_FRAMES];
++    unsigned count;
++} ch34x_frames_t;
++
++typedef struct {
++    const char* name;
++    unsigned write_frame_max;
++    unsigned out_payload_max;
++    unsigned read_cont_chunk;
++    unsigned read_head_in;
++} ch34x_profile_t;
++
++static const ch34x_profile_t ch34x_profiles[] = {
++    { "ch347", 64, 21, 0, 0 },
++    { "ch341", 16, 11, 30, 20 },
++};
++
++static ch34x_frame_t* frames_add(ch34x_frames_t* fs)
++{
++    ch34x_frame_t* fr = &fs->f[fs->count++];
++    fr->len = 0;
++    return fr;
++}
++
++static void fr_push(ch34x_frame_t* fr, unsigned char v)
++{
++    fr->b[fr->len++] = v;
++}
++
++static void fr_push_be32(ch34x_frame_t* fr, unsigned int v)
++{
++    fr_push(fr, (unsigned char)((v >> 24) & 0xFF));
++    fr_push(fr, (unsigned char)((v >> 16) & 0xFF));
++    fr_push(fr, (unsigned char)((v >> 8) & 0xFF));
++    fr_push(fr, (unsigned char)(v & 0xFF));
++}
++
++static void fr_push_head(ch34x_frame_t* fr, unsigned int slave, unsigned int cr)
++{
++    fr_push(fr, CH34X_CMD_STREAM);
++    fr_push(fr, CH34X_STM_STA);
++    fr_push(fr, CH34X_STM_OUT | 5);
++    fr_push(fr, (unsigned char)((slave << 1) & 0xFE));
++    fr_push_be32(fr, cr);
++    fr_push(fr, CH34X_STM_STA);
++    fr_push(fr, CH34X_STM_OUT | 1);
++    fr_push(fr, (unsigned char)((slave << 1) | 1));
++}
++
++static void ch34x_read_fixup_last(ch34x_frames_t* fs)
++{
++    ch34x_frame_t* fr = &fs->f[fs->count - 1];
++    unsigned int k;
++
++    fr->len--;
++    k = fr->b[fr->len - 1] & CH34X_STM_N_MAX;
++    fr->len--;
++    if (k > 1)
++    {
++        fr_push(fr, CH34X_STM_IN | (k - 1));
++    }
++    fr_push(fr, CH34X_STM_IN);
++    fr_push(fr, CH34X_STM_STO);
++    fr_push(fr, CH34X_STM_END);
++}
++
++static void ch34x_build_combined_read(ch34x_frames_t* fs, const ch34x_profile_t* p,
++                                      unsigned int slave, unsigned int cr, unsigned int n)
++{
++    ch34x_frame_t* fr;
++    unsigned int remaining = n;
++
++    if (p->read_cont_chunk == 0)
++    {
++        fr = frames_add(fs);
++        fr_push_head(fr, slave, cr);
++        while (remaining > 0)
++        {
++            unsigned int take = remaining < CH34X_STM_N_MAX ? remaining : CH34X_STM_N_MAX;
++            if (remaining - take > 0 && take == CH34X_STM_N_MAX)
++            {
++                fr_push(fr, CH34X_STM_IN | take);
++            }
++            else if (take > 1)
++            {
++                fr_push(fr, CH34X_STM_IN | (take - 1));
++                fr_push(fr, CH34X_STM_IN);
++            }
++            else
++            {
++                fr_push(fr, CH34X_STM_IN);
++            }
++            remaining -= take;
++        }
++        fr_push(fr, CH34X_STM_STO);
++        fr_push(fr, CH34X_STM_END);
++    }
++    else
++    {
++        unsigned int take = remaining < p->read_head_in ? remaining : p->read_head_in;
++
++        fr = frames_add(fs);
++        fr_push_head(fr, slave, cr);
++        fr_push(fr, CH34X_STM_IN | take);
++        fr_push(fr, CH34X_STM_END);
++        remaining -= take;
++        while (remaining > 0)
++        {
++            take = remaining < p->read_cont_chunk ? remaining : p->read_cont_chunk;
++            fr = frames_add(fs);
++            fr_push(fr, CH34X_CMD_STREAM);
++            fr_push(fr, CH34X_STM_IN | take);
++            fr_push(fr, CH34X_STM_END);
++            remaining -= take;
++        }
++        ch34x_read_fixup_last(fs);
++    }
++}
++
++static void ch34x_push_mwrite4(ch34x_frames_t* fs, unsigned int slave, unsigned int cr,
++                               const unsigned char* val4)
++{
++    ch34x_frame_t* fr = frames_add(fs);
++    unsigned int i;
++
++    fr_push(fr, CH34X_CMD_STREAM);
++    fr_push(fr, CH34X_STM_STA);
++    fr_push(fr, CH34X_STM_OUT | 9);
++    fr_push(fr, (unsigned char)((slave << 1) & 0xFE));
++    fr_push_be32(fr, cr);
++    for (i = 0; i < 4; i++)
++    {
++        fr_push(fr, val4[i]);
++    }
++    fr_push(fr, CH34X_STM_STO);
++    fr_push(fr, CH34X_STM_END);
++}
++
++static void ch34x_build_write(ch34x_frames_t* fs, const ch34x_profile_t* p,
++                              unsigned int slave, unsigned int cr,
++                              const unsigned char* data, unsigned int len)
++{
++    unsigned int end = cr + len;
++    unsigned int aligned_start = (cr & 3) == 0;
++    unsigned int aligned_end = (end & 3) == 0;
++
++    if (aligned_start && aligned_end &&
++        10 + len <= p->write_frame_max && 5 + len <= p->out_payload_max)
++    {
++        ch34x_frame_t* fr = frames_add(fs);
++        unsigned int i;
++
++        fr_push(fr, CH34X_CMD_STREAM);
++        fr_push(fr, CH34X_STM_STA);
++        fr_push(fr, CH34X_STM_OUT | (5 + len));
++        fr_push(fr, (unsigned char)((slave << 1) & 0xFE));
++        fr_push_be32(fr, cr);
++        for (i = 0; i < len; i++)
++        {
++            fr_push(fr, data[i]);
++        }
++        fr_push(fr, CH34X_STM_STO);
++        fr_push(fr, CH34X_STM_END);
++        return;
++    }
++
++    if (aligned_start && aligned_end)
++    {
++        unsigned int off;
++        for (off = 0; off < len; off += 4)
++        {
++            ch34x_push_mwrite4(fs, slave, cr + off, data + off);
++        }
++        return;
++    }
++
++    {
++        unsigned int d0 = cr & ~3U;
++        unsigned int dlast = (end - 1) & ~3U;
++        unsigned int d;
++
++        for (d = d0; d <= dlast; d += 4)
++        {
++            unsigned int i;
++            int full = 1;
++            for (i = 0; i < 4; i++)
++            {
++                if (d + i < cr || d + i >= end)
++                {
++                    full = 0;
++                }
++            }
++            if (!full)
++            {
++                ch34x_build_combined_read(fs, p, slave, d, 4);
++            }
++        }
++        for (d = d0; d <= dlast; d += 4)
++        {
++            unsigned char merged[4];
++            unsigned int i;
++            for (i = 0; i < 4; i++)
++            {
++                merged[i] = (d + i >= cr && d + i < end) ? data[d + i - cr] : 0;
++            }
++            ch34x_push_mwrite4(fs, slave, d, merged);
++        }
++    }
++}
++
++static void ch34x_build_probe(ch34x_frames_t* fs, unsigned int slave)
++{
++    ch34x_frame_t* fr = frames_add(fs);
++
++    fr_push(fr, CH34X_CMD_STREAM);
++    fr_push(fr, CH34X_STM_STA);
++    fr_push(fr, CH34X_STM_OUT);
++    fr_push(fr, (unsigned char)((slave << 1) & 0xFE));
++    fr_push(fr, CH34X_STM_STO);
++    fr_push(fr, CH34X_STM_END);
++}
++
++static void ch34x_build_set_speed(ch34x_frames_t* fs, unsigned int speed)
++{
++    ch34x_frame_t* fr = frames_add(fs);
++
++    fr_push(fr, CH34X_CMD_STREAM);
++    fr_push(fr, CH34X_STM_SET | (speed & 3));
++    fr_push(fr, CH34X_STM_END);
++}
++
++static void emit(const ch34x_frames_t* fs)
++{
++    unsigned int i;
++    unsigned int j;
++
++    for (i = 0; i < fs->count; i++)
++    {
++        const ch34x_frame_t* fr = &fs->f[i];
++        for (j = 0; j < fr->len; j++)
++        {
++            printf(j ? " %02x" : "%02x", fr->b[j]);
++        }
++        printf("\n");
++    }
++}
++
++int main(int argc, char** argv)
++{
++    static const unsigned char p16[16] = { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
++                                           0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f };
++    static const unsigned char mwrite4_val[4] = { 0x12, 0x34, 0x56, 0x78 };
++    static const unsigned char rmw_val[6] = { 0x12, 0x13, 0x14, 0x15, 0x16, 0x17 };
++    const ch34x_profile_t* prof;
++    const char* scenario;
++    const char* profile = "ch347";
++    ch34x_frames_t fs;
++    unsigned int np;
++    unsigned int i;
++
++    if (argc < 2 || argc > 4)
++    {
++        fprintf(stderr, "usage: ch34x_frames <scenario> [--profile ch347|ch341]\n");
++        return 2;
++    }
++    scenario = argv[1];
++    if (argc == 4)
++    {
++        if (strcmp(argv[2], "--profile") != 0)
++        {
++            fprintf(stderr, "usage: ch34x_frames <scenario> [--profile ch347|ch341]\n");
++            return 2;
++        }
++        profile = argv[3];
++    }
++
++    np = sizeof(ch34x_profiles) / sizeof(ch34x_profiles[0]);
++    prof = NULL;
++    for (i = 0; i < np; i++)
++    {
++        if (strcmp(ch34x_profiles[i].name, profile) == 0)
++        {
++            prof = &ch34x_profiles[i];
++            break;
++        }
++    }
++    if (!prof)
++    {
++        fprintf(stderr, "ch34x_frames: unknown profile '%s'\n", profile);
++        return 2;
++    }
++
++    memset(&fs, 0, sizeof(fs));
++
++    if (strcmp(scenario, "mread4") == 0)
++    {
++        ch34x_build_combined_read(&fs, prof, CH34X_I2C_SLAVE, 0xf0014, 4);
++    }
++    else if (strcmp(scenario, "mwrite4") == 0)
++    {
++        ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0014, mwrite4_val, 4);
++    }
++    else if (strcmp(scenario, "read_block64") == 0)
++    {
++        ch34x_build_combined_read(&fs, prof, CH34X_I2C_SLAVE, 0xf0014, 64);
++    }
++    else if (strcmp(scenario, "write_block16_gw") == 0)
++    {
++        ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0410, p16, 16);
++    }
++    else if (strcmp(scenario, "write_block16_split") == 0)
++    {
++        for (i = 0; i < 4; i++)
++        {
++            ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0410 + 4 * i, p16 + 4 * i, 4);
++        }
++    }
++    else if (strcmp(scenario, "probe_0x48") == 0)
++    {
++        ch34x_build_probe(&fs, CH34X_I2C_SLAVE);
++    }
++    else if (strcmp(scenario, "set_speed_400k") == 0)
++    {
++        ch34x_build_set_speed(&fs, 2);
++    }
++    else if (strcmp(scenario, "write_unaligned_rm") == 0)
++    {
++        ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0412, rmw_val, 6);
++    }
++    else
++    {
++        fprintf(stderr, "ch34x_frames: unknown scenario '%s'\n", scenario);
++        return 2;
++    }
++
++    emit(&fs);
++    return 0;
++}
 diff --git a/mtcr_ul/mtcr_ul_com.c b/mtcr_ul/mtcr_ul_com.c
 index 39c893b..b2e74e7 100644
 --- a/mtcr_ul/mtcr_ul_com.c
