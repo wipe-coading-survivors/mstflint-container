@@ -1,0 +1,269 @@
+diff --git a/include/mtcr_ul/mtcr_mf.h b/include/mtcr_ul/mtcr_mf.h
+index 4702772..da3323b 100644
+--- a/include/mtcr_ul/mtcr_mf.h
++++ b/include/mtcr_ul/mtcr_mf.h
+@@ -56,6 +56,10 @@ struct page_list_fbsd {
+ /*  All fields in follow structure are not supposed to be used */
+ /*  or modified by user programs. Except i2c_secondary that may be */
+ /*  modified before each access to target I2C slave address */
++#ifdef ENABLE_MST_DEV_I2C
++typedef int (*mtcr_i2c_bus_transact_fn)(mfile* mf, u_int8_t slave, const u_int8_t* w, size_t wlen, u_int8_t* r, size_t rlen);
++typedef void (*mtcr_i2c_bus_close_fn)(mfile* mf);
++#endif
+ struct mfile_t {
+     u_int16_t     hw_dev_id;
+     u_int16_t     pci_device_id;
+@@ -97,6 +101,10 @@ struct mfile_t {
+     void       * fallback_mf;
+     unsigned int i2c_RESERVED; /*  Reserved for internal usage (i2c internal) */
+     int          i2c_smbus;
++#ifdef ENABLE_MST_DEV_I2C
++    mtcr_i2c_bus_transact_fn i2c_transact;
++    mtcr_i2c_bus_close_fn    i2c_bus_close;
++#endif
+     enum Mdevs_t flags;
+     u_int32_t    connectx_wa_slot; /* apply connectx cr write workaround */
+     int          connectx_wa_last_op_write;
+diff --git a/mtcr_ul/mtcr_ul_com.c b/mtcr_ul/mtcr_ul_com.c
+index 39c893b..b2e74e7 100644
+--- a/mtcr_ul/mtcr_ul_com.c
++++ b/mtcr_ul/mtcr_ul_com.c
+@@ -2621,39 +2621,56 @@ static inline int prepare_i2c_data(unsigned char* buf, DType dtype, u_int32_t of
+     return data_length + len;
+ }
+ 
+-int mtcr_i2c_mread4(mfile* mf, unsigned int offset, u_int32_t* value)
++static int dev_i2c_transact(mfile* mf, u_int8_t slave, const u_int8_t* w, size_t wlen, u_int8_t* r, size_t rlen)
+ {
+-    int bytes_read = 4; /* Indicates success */
+     struct i2c_rdwr_ioctl_data i2c_rdwr;
+     struct i2c_msg i2c_msg[2];
+-    char maddr[4];
+-    char data[4];
++    int nmsgs = 0;
++
++    if (wlen)
++    {
++        i2c_msg[nmsgs].addr = slave;
++        i2c_msg[nmsgs].flags = 0;
++        i2c_msg[nmsgs].len = wlen;
++        i2c_msg[nmsgs].buf = (unsigned char*)w;
++        nmsgs++;
++    }
++    if (rlen)
++    {
++        i2c_msg[nmsgs].addr = slave;
++        i2c_msg[nmsgs].flags = I2C_M_RD;
++        i2c_msg[nmsgs].len = rlen;
++        i2c_msg[nmsgs].buf = r;
++        nmsgs++;
++    }
+ 
+-    i2c_msg[0].addr = mf->i2c_secondary;
+-    i2c_msg[0].flags = 0;
+-    i2c_msg[0].buf = (unsigned char*)(&maddr[0]);
+-    i2c_msg[1].addr = mf->i2c_secondary;
+-    i2c_msg[1].flags = I2C_M_RD;
+-    i2c_msg[1].len = 4;
+-    i2c_msg[1].buf = (unsigned char*)data;
+     i2c_rdwr.msgs = i2c_msg;
+-    i2c_rdwr.nmsgs = 2;
++    i2c_rdwr.nmsgs = nmsgs;
+ 
+-    i2c_msg[0].len = prepare_i2c_buf(maddr, mf->dtype, offset);
++    int int_rc = ioctl(mf->fd, I2C_RDWR, &i2c_rdwr);
+ 
+-    if (!i2c_msg[0].len)
++    if (int_rc < 0)
+     {
+-        i2c_msg[0].flags = I2C_M_RD;
+-        i2c_msg[0].len = 4;
+-        i2c_msg[0].buf = (unsigned char*)data;
+-        i2c_rdwr.nmsgs = 1;
++        DBG_PRINTF("function: %s. I2C ioctl failed: %s\n", __FUNCTION__, strerror(errno));
+     }
+-    int int_rc = ioctl(mf->fd, I2C_RDWR, &i2c_rdwr);
++
++    return int_rc;
++}
++
++int mtcr_i2c_mread4(mfile* mf, unsigned int offset, u_int32_t* value)
++{
++    int bytes_read = 4; /* Indicates success */
++    char maddr[4];
++    char data[4];
++    size_t wlen;
++
++    wlen = prepare_i2c_buf(maddr, mf->dtype, offset);
++
++    int int_rc = mf->i2c_transact(mf, mf->i2c_secondary, (u_int8_t*)maddr, wlen, (u_int8_t*)data, 4);
+ 
+     if (int_rc < 0)
+     {
+         bytes_read = -1;
+-        DBG_PRINTF("function: %s. I2C ioctl failed: %s\n", __FUNCTION__, strerror(errno));
+     }
+     BYTES_TO_DWORD_BE(value, data);
+ 
+@@ -2665,32 +2682,18 @@ int mtcr_i2c_mread4(mfile* mf, unsigned int offset, u_int32_t* value)
+ int mtcr_i2c_mwrite4(mfile* mf, unsigned int offset, u_int32_t value)
+ {
+     int bytes_written = 4; /* Indicates success */
+-    struct i2c_rdwr_ioctl_data i2c_rdwr;
+-    struct i2c_msg i2c_msg[1];
+     unsigned char data[8]; /* Buffer for I2C data */
+ 
+     memset(data, 0, sizeof(data));
+ 
+-    i2c_msg[0].addr = mf->i2c_secondary; /* Device address */
+-    i2c_msg[0].flags = 0;                /* Write operation */
+-    i2c_msg[0].buf = data;               /* Pointer to the data buffer */
+-
+     value = __cpu_to_be32(value);
+-    int len = prepare_i2c_data(data, mf->dtype, offset, &value, sizeof(value));
++    size_t len = prepare_i2c_data(data, mf->dtype, offset, &value, sizeof(value));
+ 
+-    i2c_msg[0].len = len;
+-
+-    /* Set up the ioctl structure */
+-    i2c_rdwr.msgs = i2c_msg;
+-    i2c_rdwr.nmsgs = 1;
+-
+-    int int_rc = ioctl(mf->fd, I2C_RDWR, &i2c_rdwr);
++    int int_rc = mf->i2c_transact(mf, mf->i2c_secondary, data, len, NULL, 0);
+ 
+     if (int_rc < 0)
+     {
+         bytes_written = -1;
+-        DBG_PRINTF("function: %s. I2C ioctl failed: %s\n", __FUNCTION__, strerror(errno));
+-        return bytes_written;
+     }
+ 
+     DBG_PRINTF("mtcr_i2c_mwrite4: mf->i2c_secondary: 0x%x offset: 0x%x. value: 0x%x. bytes_written: %d\n", mf->i2c_secondary, offset, value, bytes_written);
+@@ -2717,31 +2720,13 @@ int mread_i2cblock(mfile* mf, unsigned char i2c_secondary, u_int8_t addr_width,
+     mf->i2c_secondary = i2c_secondary;
+ 
+     char maddr[4];
+-    struct i2c_rdwr_ioctl_data i2c_rdwr;
+-    struct i2c_msg i2c_msg[2];
++    size_t wlen;
+ 
+-    i2c_msg[0].addr = mf->i2c_secondary;
+-    i2c_msg[0].flags = 0;
+-    i2c_msg[0].buf = (unsigned char*)&maddr[0];
+-    i2c_msg[1].addr = mf->i2c_secondary;
+-    i2c_msg[1].flags = I2C_M_RD;
+-    i2c_msg[1].len = length;
+-    i2c_msg[1].buf = (unsigned char*)data;
+-    i2c_rdwr.msgs = i2c_msg;
+-    i2c_rdwr.nmsgs = 2;
+-    i2c_msg[0].len = prepare_i2c_buf(maddr, mf->dtype, offset);
++    wlen = prepare_i2c_buf(maddr, mf->dtype, offset);
+ 
+-    if (!i2c_msg[0].len)
+-    {
+-        i2c_msg[0].flags = I2C_M_RD;
+-        i2c_msg[0].len = length;
+-        i2c_msg[0].buf = (unsigned char*)data;
+-        i2c_rdwr.nmsgs = 1;
+-    }
+-    rc = ioctl(mf->fd, I2C_RDWR, &i2c_rdwr);
++    rc = mf->i2c_transact(mf, mf->i2c_secondary, (u_int8_t*)maddr, wlen, (u_int8_t*)data, length);
+     if (rc < 0)
+     {
+-        DBG_PRINTF("function: %s. I2C ioctl failed: %s\n", __FUNCTION__, strerror(errno));
+         return rc;
+     }
+     return length;
+@@ -2765,22 +2750,14 @@ int mwrite_i2cblock(mfile* mf, unsigned char i2c_secondary, u_int8_t addr_width,
+     }
+     mf->i2c_secondary = i2c_secondary;
+ 
+-    struct i2c_rdwr_ioctl_data i2c_rdwr;
+-    struct i2c_msg i2c_msg[1];
+     unsigned char buf[64 + 4];
++    size_t len;
+ 
+-    i2c_msg[0].addr = mf->i2c_secondary;
+-    i2c_msg[0].flags = 0;
+-    i2c_msg[0].buf = buf;
+-    i2c_rdwr.msgs = i2c_msg;
+-    i2c_rdwr.nmsgs = 1;
+-
+-    i2c_msg[0].len = prepare_i2c_data(buf, mf->dtype, offset, data, length);
++    len = prepare_i2c_data(buf, mf->dtype, offset, data, length);
+ 
+-    rc = ioctl(mf->fd, I2C_RDWR, &i2c_rdwr);
++    rc = mf->i2c_transact(mf, mf->i2c_secondary, buf, len, NULL, 0);
+     if (rc < 0)
+     {
+-        DBG_PRINTF("function: %s. I2C ioctl failed: %s\n", __FUNCTION__, strerror(errno));
+         return rc;
+     }
+ 
+@@ -2796,6 +2773,39 @@ void safe_free(mfile** pmf)
+     }
+ }
+ 
++static int ch34x_transact(mfile* mf, u_int8_t slave, const u_int8_t* w, size_t wlen, u_int8_t* r, size_t rlen)
++{
++    (void)mf;
++    (void)slave;
++    (void)w;
++    (void)wlen;
++    (void)r;
++    (void)rlen;
++
++    errno = ENOSYS;
++    return -1;
++}
++
++static int mtcr_ch34x_open(mfile* mf, const char* name)
++{
++    unsigned int bus = 0;
++    unsigned int addr = 0;
++
++    if (strcmp(name, "ch34x") != 0 && sscanf(name, "ch34x:%x.%x", &bus, &addr) != 2)
++    {
++        errno = EINVAL;
++        return -1;
++    }
++
++    (void)bus;
++    (void)addr;
++
++    mf->i2c_transact = ch34x_transact;
++
++    errno = ENOSYS;
++    return -1;
++}
++
+ static int mtcr_i2c_open(mfile* mf, const char* name)
+ {
+     ul_ctx_t* ctx = mf->ul_ctx;
+@@ -2810,6 +2820,13 @@ static int mtcr_i2c_open(mfile* mf, const char* name)
+     ctx->mread4_block = (f_mread4_block)mtcr_i2c_mread_chunks;
+     ctx->mwrite4_block = (f_mwrite4_block)mtcr_i2c_mwrite_chunks;
+ 
++    if (strstr(name, "ch34x") == name)
++    {
++        return mtcr_ch34x_open(mf, name);
++    }
++
++    mf->i2c_transact = dev_i2c_transact;
++
+     if ((mf->fd = open(name, O_RDWR | O_SYNC)) < 0)
+     {
+         safe_free(&mf);
+@@ -3054,6 +3071,11 @@ static MType mtcr_parse_name(const char* name, int* force, unsigned* domain_p, u
+     {
+         return MST_DEV_I2C;
+     }
++
++    if (strstr(name, "ch34x") == name)
++    {
++        return MST_DEV_I2C;
++    }
+ #endif
+ 
+ #ifdef ENABLE_VFIO
