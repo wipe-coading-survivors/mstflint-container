@@ -9,7 +9,7 @@ ARG MSTFLINT_TAG
 RUN dnf install -y autoconf automake libtool gcc gcc-c++ make \
         openssl-devel zlib-devel libibmad-devel libibumad-devel \
         libibverbs libibmad libibumad infiniband-diags perftest \
-        expat-devel xz-devel \
+        expat-devel xz-devel libusb1-devel \
         patchelf curl ca-certificates file patch python3 \
     && dnf clean all
 
@@ -17,6 +17,7 @@ COPY mstflint /src/mstflint
 COPY mstflint-data-path-env.patch /src/mstflint-data-path-env.patch
 COPY mstflint-secure-read-flag.patch /src/mstflint-secure-read-flag.patch
 COPY mstflint-hw-set-nonexternal.patch /src/mstflint-hw-set-nonexternal.patch
+COPY mstflint-ch34x-i2c-transport.patch /src/mstflint-ch34x-i2c-transport.patch
 COPY mft-stage.sh /opt/mft-stage.sh
 COPY mstflint-icon.png /opt/mstflint-icon.png
 
@@ -35,6 +36,14 @@ COPY mstflint-icon.png /opt/mstflint-icon.png
 # default is no). The grep gate below fails the build if the backend is
 # silently dropped: the /dev/i2c literal exists in the tree only inside the
 # ENABLE_MST_DEV_I2C ifdef in mtcr_ul/mtcr_ul_com.c (mtcr_parse_name).
+# mstflint-ch34x-i2c-transport.patch (-1.5, mtusb-i2c-impl cycle) refactors
+# the mtcr i2c core onto bus ops: i2c_transact/i2c_bus_close fn pointers on
+# mfile, dev_i2c_transact carries the I2C_RDWR ioctl bodies of the four i2c
+# accessors verbatim, and a full ch34x USB transport (libusb-1.0) lives in
+# mtcr_ul/ch34x_usb.c: adapter listing/dispatch, per-PID profiles, env knobs
+# and the four i2c accessors driven over bulk endpoints. Gates: the USB core
+# and its libusb include must be present in the tree and the ch34x parse
+# literal must land in the binary.
 RUN cd /src/mstflint \
     && patch -p1 < /src/mstflint-data-path-env.patch \
     && grep -q "MSTFLINT_DATA_PATH" mlxconfig/mlxcfg_commander.cpp \
@@ -50,6 +59,9 @@ RUN cd /src/mstflint \
     && patch -p1 < /src/mstflint-hw-set-nonexternal.patch \
     && grep -q "Set/query HW info" flint/subcommands.cpp \
     && ! grep -q -- "-DEXTERNAL" flint/Makefile.am \
+    && patch -p1 < /src/mstflint-ch34x-i2c-transport.patch \
+    && grep -q "ch34x_transact" mtcr_ul/ch34x_usb.c \
+    && grep -q "libusb-1.0/libusb.h" mtcr_ul/ch34x_usb.c \
     && ./autogen.sh \
     && CFLAGS="-O2 -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types" \
         CXXFLAGS="-O2 -Wno-error" \
@@ -58,6 +70,7 @@ RUN cd /src/mstflint \
     && make -j"$(nproc)" \
     && make install \
     && grep -aq -- '/dev/i2c' /usr/local/bin/mstflint \
+    && grep -aq "ch34x" /usr/local/bin/mstflint \
     && test -d /usr/local/share/mstflint/prm_dbs/hca/ext \
     && test "$(/usr/local/bin/mstflint --version | grep -o 'Git SHA Hash: [0-9a-f]\+')" = "Git SHA Hash: ${MSTFLINT_SHA}" \
     && rm -rf /src/mstflint
@@ -91,6 +104,6 @@ LABEL org.opencontainers.image.revision="${MSTFLINT_SHA}" \
 COPY --from=builder /usr/local /usr/local
 COPY --from=builder /opt/mft-artifacts /opt/mft-artifacts
 
-RUN dnf install -y openssl zlib libxml2 libcurl xz-libs expat \
+RUN dnf install -y openssl zlib libxml2 libcurl xz-libs expat libusb1 \
         libibverbs libibmad libibumad infiniband-diags perftest \
     && dnf clean all
