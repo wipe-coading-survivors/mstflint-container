@@ -1,5 +1,44 @@
+diff --git a/cmdif/Makefile.am b/cmdif/Makefile.am
+index 058aead..5dc9e61 100644
+--- a/cmdif/Makefile.am
++++ b/cmdif/Makefile.am
+@@ -54,6 +54,6 @@ cmdif_pylibdir = $(libdir)/mstflint/python_tools/
+ cmdif_pylib_DATA = ${CCMDIF_SO} cmdif.py
+ ${CCMDIF_SO}: libcmdif.la
+ 	$(CC) -g -Wall -pthread -shared ${CFLAGS} ${LDFLAGS} *.o -o ${CCMDIF_SO} \
+-	$(top_builddir)/tools_layouts/.libs/libtools_layouts.a $(top_builddir)/${MTCR_CONF_DIR}/.libs/libmtcr_ul.a -lstdc++
++	$(top_builddir)/tools_layouts/.libs/libtools_layouts.a $(top_builddir)/${MTCR_CONF_DIR}/.libs/libmtcr_ul.a -lstdc++ -lusb-1.0
+ 
+ CLEANFILES = ${CCMDIF_SO}
+diff --git a/configure.ac b/configure.ac
+index 86033da..6780a67 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -584,6 +584,10 @@ AC_MSG_RESULT($enable_i2c)
+ if test "x$enable_i2c" = "xyes"; then
+     CXXFLAGS="$CXXFLAGS -DENABLE_MST_DEV_I2C"
+     CFLAGS="$CFLAGS -DENABLE_MST_DEV_I2C"
++    AC_CHECK_HEADER([libusb-1.0/libusb.h], [],
++        [AC_MSG_ERROR([libusb-1.0 headers are required for --enable-i2c])])
++    AC_CHECK_LIB([usb-1.0], [libusb_init], [],
++        [AC_MSG_ERROR([libusb-1.0 is required for --enable-i2c])])
+ fi
+ AM_CONDITIONAL(ENABLE_MST_DEV_I2C, [ test "x$enable_i2c" = "xyes" ])
+ ##
+diff --git a/dev_mgt/Makefile.am b/dev_mgt/Makefile.am
+index 863054f..4ab80da 100644
+--- a/dev_mgt/Makefile.am
++++ b/dev_mgt/Makefile.am
+@@ -55,6 +55,6 @@ c_dev_mgt.so: libdev_mgt.la
+ 	$(CC) -g -Wall -pthread -shared ${CFLAGS} ${LDFLAGS} tools_dev_types.o -o c_dev_mgt.so \
+ 	$(top_builddir)/reg_access/.libs/libreg_access.a \
+ 	$(top_builddir)/tools_layouts/.libs/libtools_layouts.a \
+-	$(top_builddir)/${MTCR_CONF_DIR}/.libs/libmtcr_ul.a -lstdc++
++	$(top_builddir)/${MTCR_CONF_DIR}/.libs/libmtcr_ul.a -lstdc++ -lusb-1.0
+ 
+ CLEANFILES = c_dev_mgt.so
 diff --git a/include/mtcr_ul/mtcr_mf.h b/include/mtcr_ul/mtcr_mf.h
-index 4702772..da3323b 100644
+index 4702772..f6b6e5b 100644
 --- a/include/mtcr_ul/mtcr_mf.h
 +++ b/include/mtcr_ul/mtcr_mf.h
 @@ -56,6 +56,10 @@ struct page_list_fbsd {
@@ -13,85 +52,233 @@ index 4702772..da3323b 100644
  struct mfile_t {
      u_int16_t     hw_dev_id;
      u_int16_t     pci_device_id;
-@@ -97,6 +101,10 @@ struct mfile_t {
+@@ -97,6 +101,11 @@ struct mfile_t {
      void       * fallback_mf;
      unsigned int i2c_RESERVED; /*  Reserved for internal usage (i2c internal) */
      int          i2c_smbus;
 +#ifdef ENABLE_MST_DEV_I2C
 +    mtcr_i2c_bus_transact_fn i2c_transact;
 +    mtcr_i2c_bus_close_fn    i2c_bus_close;
++    void*                    i2c_bus_ctx;
 +#endif
      enum Mdevs_t flags;
      u_int32_t    connectx_wa_slot; /* apply connectx cr write workaround */
      int          connectx_wa_last_op_write;
+diff --git a/mtcr_py/Makefile.am b/mtcr_py/Makefile.am
+index a9fdb0f..c015a0e 100644
+--- a/mtcr_py/Makefile.am
++++ b/mtcr_py/Makefile.am
+@@ -50,6 +50,6 @@ CMTCR_JSON_LIBS =
+ endif
+ 
+ cmtcr.so:
+-	$(CC) -g -Wall -pthread -shared ${CFLAGS} ${LDFLAGS} -o cmtcr.so -Wl,--whole-archive $(top_builddir)/${MTCR_CONF_DIR}/.libs/libmtcr_ul.a -Wl,--no-whole-archive $(CMTCR_JSON_LIBS) -lstdc++
++	$(CC) -g -Wall -pthread -shared ${CFLAGS} ${LDFLAGS} -o cmtcr.so -Wl,--whole-archive $(top_builddir)/${MTCR_CONF_DIR}/.libs/libmtcr_ul.a -Wl,--no-whole-archive $(CMTCR_JSON_LIBS) -lstdc++ -lusb-1.0
+ 
+ CLEANFILES = cmtcr.so
 diff --git a/mtcr_ul/Makefile.am b/mtcr_ul/Makefile.am
-index ef3c0b9..1955e44 100644
+index ef3c0b9..3461078 100644
 --- a/mtcr_ul/Makefile.am
 +++ b/mtcr_ul/Makefile.am
-@@ -78,3 +78,7 @@ libraryinclude_HEADERS = $(top_srcdir)/include/mtcr_ul/mtcr.h  $(top_srcdir)/inc
+@@ -78,3 +78,12 @@ libraryinclude_HEADERS = $(top_srcdir)/include/mtcr_ul/mtcr.h  $(top_srcdir)/inc
  install-exec-hook:
  	rm -f $(DESTDIR)$(pkglibdir)/libmtcr_ul.so* $(DESTDIR)$(pkglibdir)/libmtcr_ul.la
  	ln -snf mstflint/libmtcr_ul.a $(DESTDIR)$(libdir)/libmtcr_ul.a
 +
 +bin_PROGRAMS = ch34x_frames
 +
-+ch34x_frames_SOURCES = ch34x_frames.c
++ch34x_frames_SOURCES = ch34x_frames.c ch34x_frames_core.c
++
++if ENABLE_MST_DEV_I2C
++libmtcr_ul_la_SOURCES += ch34x_usb.c ch34x_frames_core.c ch34x_frames_core.h
++libmtcr_ul_la_LIBADD += -lusb-1.0
++endif
 diff --git a/mtcr_ul/ch34x_frames.c b/mtcr_ul/ch34x_frames.c
 new file mode 100644
-index 0000000..2ea0669
+index 0000000..ead9369
 --- /dev/null
 +++ b/mtcr_ul/ch34x_frames.c
-@@ -0,0 +1,362 @@
+@@ -0,0 +1,107 @@
 +#include <stdio.h>
++#include <stdlib.h>
 +#include <string.h>
++#include "ch34x_frames_core.h"
 +
-+#define CH34X_CMD_STREAM 0xAA
-+#define CH34X_STM_STA    0x74
-+#define CH34X_STM_STO    0x75
-+#define CH34X_STM_OUT    0x80
-+#define CH34X_STM_IN     0xC0
-+#define CH34X_STM_SET    0x60
-+#define CH34X_STM_END    0x00
++static void emit(const ch34x_frames_t* fs)
++{
++    unsigned int i;
++    unsigned int j;
 +
-+#define CH34X_STM_N_MAX  0x3F
++    if (fs->overflow)
++    {
++        fprintf(stderr, "ch34x_frames: frame buffer overflow\n");
++        exit(1);
++    }
++    for (i = 0; i < fs->count; i++)
++    {
++        const ch34x_frame_t* fr = &fs->f[i];
++        for (j = 0; j < fr->len; j++)
++        {
++            printf(j ? " %02x" : "%02x", fr->b[j]);
++        }
++        printf("\n");
++    }
++}
 +
-+#define CH34X_MAX_FRAMES 8
-+#define CH34X_FRAME_MAX  64
++int main(int argc, char** argv)
++{
++    static const unsigned char p16[16] = { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
++                                           0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f };
++    static const unsigned char mwrite4_val[4] = { 0x12, 0x34, 0x56, 0x78 };
++    static const unsigned char rmw_val[6] = { 0x12, 0x13, 0x14, 0x15, 0x16, 0x17 };
++    const ch34x_profile_t* prof;
++    const char* scenario;
++    const char* profile = "ch347";
++    ch34x_frames_t fs;
++    unsigned int i;
 +
-+#define CH34X_I2C_SLAVE  0x48
++    if (argc < 2 || argc > 4)
++    {
++        fprintf(stderr, "usage: ch34x_frames <scenario> [--profile ch347|ch341]\n");
++        return 2;
++    }
++    scenario = argv[1];
++    if (argc == 4)
++    {
++        if (strcmp(argv[2], "--profile") != 0)
++        {
++            fprintf(stderr, "usage: ch34x_frames <scenario> [--profile ch347|ch341]\n");
++            return 2;
++        }
++        profile = argv[3];
++    }
 +
-+typedef struct {
-+    unsigned char b[CH34X_FRAME_MAX];
-+    unsigned len;
-+} ch34x_frame_t;
++    prof = ch34x_profile_by_name(profile);
++    if (!prof)
++    {
++        fprintf(stderr, "ch34x_frames: unknown profile '%s'\n", profile);
++        return 2;
++    }
 +
-+typedef struct {
-+    ch34x_frame_t f[CH34X_MAX_FRAMES];
-+    unsigned count;
-+} ch34x_frames_t;
++    memset(&fs, 0, sizeof(fs));
 +
-+typedef struct {
-+    const char* name;
-+    unsigned write_frame_max;
-+    unsigned out_payload_max;
-+    unsigned read_cont_chunk;
-+    unsigned read_head_in;
-+} ch34x_profile_t;
++    if (strcmp(scenario, "mread4") == 0)
++    {
++        ch34x_build_combined_read(&fs, prof, CH34X_I2C_SLAVE, 0xf0014, 4);
++    }
++    else if (strcmp(scenario, "mwrite4") == 0)
++    {
++        ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0014, mwrite4_val, 4, NULL);
++    }
++    else if (strcmp(scenario, "read_block64") == 0)
++    {
++        ch34x_build_combined_read(&fs, prof, CH34X_I2C_SLAVE, 0xf0014, 64);
++    }
++    else if (strcmp(scenario, "write_block16_gw") == 0)
++    {
++        ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0410, p16, 16, NULL);
++    }
++    else if (strcmp(scenario, "write_block16_split") == 0)
++    {
++        for (i = 0; i < 4; i++)
++        {
++            ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0410 + 4 * i, p16 + 4 * i, 4, NULL);
++        }
++    }
++    else if (strcmp(scenario, "probe_0x48") == 0)
++    {
++        ch34x_build_probe(&fs, CH34X_I2C_SLAVE);
++    }
++    else if (strcmp(scenario, "set_speed_400k") == 0)
++    {
++        ch34x_build_set_speed(&fs, 2);
++    }
++    else if (strcmp(scenario, "write_unaligned_rm") == 0)
++    {
++        ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0412, rmw_val, 6, NULL);
++    }
++    else
++    {
++        fprintf(stderr, "ch34x_frames: unknown scenario '%s'\n", scenario);
++        return 2;
++    }
++
++    emit(&fs);
++    return 0;
++}
+diff --git a/mtcr_ul/ch34x_frames_core.c b/mtcr_ul/ch34x_frames_core.c
+new file mode 100644
+index 0000000..8cc7007
+--- /dev/null
++++ b/mtcr_ul/ch34x_frames_core.c
+@@ -0,0 +1,400 @@
++#include <string.h>
++#include "ch34x_frames_core.h"
 +
 +static const ch34x_profile_t ch34x_profiles[] = {
-+    { "ch347", 64, 21, 0, 0 },
-+    { "ch341", 16, 11, 30, 20 },
++    { "ch347", 64, 21, 0, 0, 0x55db, 2, 0x06, 0x86, CH34X_STATUS_PER_OUT_BYTE },
++    { "ch341", 16, 11, 30, 20, 0x5512, 0, 0x02, 0x82, CH34X_STATUS_BIT80 },
 +};
++
++#define CH34X_PROFILES_N (sizeof(ch34x_profiles) / sizeof(ch34x_profiles[0]))
++
++const ch34x_profile_t* ch34x_profile_by_name(const char* name)
++{
++    unsigned int i;
++
++    for (i = 0; i < CH34X_PROFILES_N; i++)
++    {
++        if (strcmp(ch34x_profiles[i].name, name) == 0)
++        {
++            return &ch34x_profiles[i];
++        }
++    }
++    return NULL;
++}
++
++const ch34x_profile_t* ch34x_profile_by_pid(unsigned pid)
++{
++    unsigned int i;
++
++    if (pid == 0x5523)
++    {
++        pid = 0x5512;
++    }
++    for (i = 0; i < CH34X_PROFILES_N; i++)
++    {
++        if (ch34x_profiles[i].pid == pid)
++        {
++            return &ch34x_profiles[i];
++        }
++    }
++    return NULL;
++}
 +
 +static ch34x_frame_t* frames_add(ch34x_frames_t* fs)
 +{
-+    ch34x_frame_t* fr = &fs->f[fs->count++];
++    ch34x_frame_t* fr;
++
++    if (fs->count >= CH34X_MAX_FRAMES)
++    {
++        fs->overflow = 1;
++        fr = &fs->stub;
++    }
++    else
++    {
++        fr = &fs->f[fs->count++];
++    }
 +    fr->len = 0;
++    fr->overflow = 0;
 +    return fr;
 +}
 +
 +static void fr_push(ch34x_frame_t* fr, unsigned char v)
 +{
++    if (fr->len >= CH34X_FRAME_MAX)
++    {
++        fr->overflow = 1;
++        return;
++    }
 +    fr->b[fr->len++] = v;
 +}
 +
@@ -117,8 +304,20 @@ index 0000000..2ea0669
 +
 +static void ch34x_read_fixup_last(ch34x_frames_t* fs)
 +{
-+    ch34x_frame_t* fr = &fs->f[fs->count - 1];
++    ch34x_frame_t* fr;
 +    unsigned int k;
++
++    if (fs->count == 0)
++    {
++        fs->overflow = 1;
++        return;
++    }
++    fr = &fs->f[fs->count - 1];
++    if (fr->len < 2)
++    {
++        fs->overflow = 1;
++        return;
++    }
 +
 +    fr->len--;
 +    k = fr->b[fr->len - 1] & CH34X_STM_N_MAX;
@@ -132,11 +331,17 @@ index 0000000..2ea0669
 +    fr_push(fr, CH34X_STM_END);
 +}
 +
-+static void ch34x_build_combined_read(ch34x_frames_t* fs, const ch34x_profile_t* p,
-+                                      unsigned int slave, unsigned int cr, unsigned int n)
++void ch34x_build_combined_read(ch34x_frames_t* fs, const ch34x_profile_t* p,
++                               unsigned int slave, unsigned int cr, unsigned int n)
 +{
 +    ch34x_frame_t* fr;
 +    unsigned int remaining = n;
++
++    if (n == 0)
++    {
++        fs->overflow = 1;
++        return;
++    }
 +
 +    if (p->read_cont_chunk == 0)
 +    {
@@ -185,8 +390,8 @@ index 0000000..2ea0669
 +    }
 +}
 +
-+static void ch34x_push_mwrite4(ch34x_frames_t* fs, unsigned int slave, unsigned int cr,
-+                               const unsigned char* val4)
++void ch34x_push_mwrite4(ch34x_frames_t* fs, unsigned int slave, unsigned int cr,
++                        const unsigned char* val4)
 +{
 +    ch34x_frame_t* fr = frames_add(fs);
 +    unsigned int i;
@@ -204,13 +409,52 @@ index 0000000..2ea0669
 +    fr_push(fr, CH34X_STM_END);
 +}
 +
-+static void ch34x_build_write(ch34x_frames_t* fs, const ch34x_profile_t* p,
-+                              unsigned int slave, unsigned int cr,
-+                              const unsigned char* data, unsigned int len)
++unsigned ch34x_rmw_partial_dwords(unsigned int cr, unsigned int len,
++                                  unsigned int* dword_crs, unsigned int max_out)
++{
++    unsigned int end = cr + len;
++    unsigned int d0 = cr & ~3U;
++    unsigned int dlast = (end - 1) & ~3U;
++    unsigned int d;
++    unsigned int n = 0;
++
++    for (d = d0; d <= dlast; d += 4)
++    {
++        unsigned int i;
++        int full = 1;
++        for (i = 0; i < 4; i++)
++        {
++            if (d + i < cr || d + i >= end)
++            {
++                full = 0;
++            }
++        }
++        if (!full)
++        {
++            if (n >= max_out)
++            {
++                return n;
++            }
++            dword_crs[n++] = d;
++        }
++    }
++    return n;
++}
++
++void ch34x_build_write(ch34x_frames_t* fs, const ch34x_profile_t* p,
++                       unsigned int slave, unsigned int cr,
++                       const unsigned char* data, unsigned int len,
++                       const unsigned char* rmw_saved)
 +{
 +    unsigned int end = cr + len;
 +    unsigned int aligned_start = (cr & 3) == 0;
 +    unsigned int aligned_end = (end & 3) == 0;
++
++    if (len == 0)
++    {
++        fs->overflow = 1;
++        return;
++    }
 +
 +    if (aligned_start && aligned_end &&
 +        10 + len <= p->write_frame_max && 5 + len <= p->out_payload_max)
@@ -247,20 +491,23 @@ index 0000000..2ea0669
 +        unsigned int dlast = (end - 1) & ~3U;
 +        unsigned int d;
 +
-+        for (d = d0; d <= dlast; d += 4)
++        if (rmw_saved == NULL)
 +        {
-+            unsigned int i;
-+            int full = 1;
-+            for (i = 0; i < 4; i++)
++            for (d = d0; d <= dlast; d += 4)
 +            {
-+                if (d + i < cr || d + i >= end)
++                unsigned int i;
++                int full = 1;
++                for (i = 0; i < 4; i++)
 +                {
-+                    full = 0;
++                    if (d + i < cr || d + i >= end)
++                    {
++                        full = 0;
++                    }
 +                }
-+            }
-+            if (!full)
-+            {
-+                ch34x_build_combined_read(fs, p, slave, d, 4);
++                if (!full)
++                {
++                    ch34x_build_combined_read(fs, p, slave, d, 4);
++                }
 +            }
 +        }
 +        for (d = d0; d <= dlast; d += 4)
@@ -269,14 +516,25 @@ index 0000000..2ea0669
 +            unsigned int i;
 +            for (i = 0; i < 4; i++)
 +            {
-+                merged[i] = (d + i >= cr && d + i < end) ? data[d + i - cr] : 0;
++                if (d + i >= cr && d + i < end)
++                {
++                    merged[i] = data[d + i - cr];
++                }
++                else if (rmw_saved != NULL)
++                {
++                    merged[i] = rmw_saved[(d - d0) * 4 + i];
++                }
++                else
++                {
++                    merged[i] = 0;
++                }
 +            }
 +            ch34x_push_mwrite4(fs, slave, d, merged);
 +        }
 +    }
 +}
 +
-+static void ch34x_build_probe(ch34x_frames_t* fs, unsigned int slave)
++void ch34x_build_probe(ch34x_frames_t* fs, unsigned int slave)
 +{
 +    ch34x_frame_t* fr = frames_add(fs);
 +
@@ -288,7 +546,7 @@ index 0000000..2ea0669
 +    fr_push(fr, CH34X_STM_END);
 +}
 +
-+static void ch34x_build_set_speed(ch34x_frames_t* fs, unsigned int speed)
++void ch34x_build_set_speed(ch34x_frames_t* fs, unsigned int speed)
 +{
 +    ch34x_frame_t* fr = frames_add(fs);
 +
@@ -297,115 +555,769 @@ index 0000000..2ea0669
 +    fr_push(fr, CH34X_STM_END);
 +}
 +
-+static void emit(const ch34x_frames_t* fs)
++int ch34x_frame_scan(const ch34x_frame_t* fr, unsigned int* out_n, unsigned int* in_n)
 +{
 +    unsigned int i;
-+    unsigned int j;
++    unsigned int o = 0;
++    unsigned int n = 0;
 +
-+    for (i = 0; i < fs->count; i++)
++    if (fr->len < 2 || fr->len > CH34X_FRAME_MAX)
 +    {
-+        const ch34x_frame_t* fr = &fs->f[i];
-+        for (j = 0; j < fr->len; j++)
++        return -1;
++    }
++    if (fr->b[0] != CH34X_CMD_STREAM || fr->b[fr->len - 1] != CH34X_STM_END)
++    {
++        return -1;
++    }
++
++    i = 1;
++    while (i < fr->len - 1)
++    {
++        unsigned char t = fr->b[i++];
++        unsigned int k;
++
++        if (t == CH34X_STM_STA || t == CH34X_STM_STO)
 +        {
-+            printf(j ? " %02x" : "%02x", fr->b[j]);
++            continue;
 +        }
-+        printf("\n");
++        if ((t & 0xFC) == CH34X_STM_SET)
++        {
++            continue;
++        }
++        if ((t & 0xC0) == CH34X_STM_OUT)
++        {
++            k = t & CH34X_STM_N_MAX;
++            if (k == 0)
++            {
++                k = 1;
++            }
++            if (i + k > fr->len - 1)
++            {
++                return -1;
++            }
++            i += k;
++            o += k;
++            continue;
++        }
++        if ((t & 0xC0) == CH34X_STM_IN)
++        {
++            k = t & CH34X_STM_N_MAX;
++            n += (k == 0) ? 1 : k;
++            continue;
++        }
++        return -1;
++    }
++
++    *out_n = o;
++    *in_n = n;
++    return 0;
++}
+diff --git a/mtcr_ul/ch34x_frames_core.h b/mtcr_ul/ch34x_frames_core.h
+new file mode 100644
+index 0000000..d3608e3
+--- /dev/null
++++ b/mtcr_ul/ch34x_frames_core.h
+@@ -0,0 +1,65 @@
++#ifndef CH34X_FRAMES_CORE_H
++#define CH34X_FRAMES_CORE_H
++
++#define CH34X_CMD_STREAM 0xAA
++#define CH34X_STM_STA    0x74
++#define CH34X_STM_STO    0x75
++#define CH34X_STM_OUT    0x80
++#define CH34X_STM_IN     0xC0
++#define CH34X_STM_SET    0x60
++#define CH34X_STM_END    0x00
++
++#define CH34X_STM_N_MAX  0x3F
++
++#define CH34X_MAX_FRAMES 32
++#define CH34X_FRAME_MAX  64
++
++#define CH34X_I2C_SLAVE  0x48
++
++#define CH34X_STATUS_PER_OUT_BYTE 1
++#define CH34X_STATUS_BIT80        2
++
++typedef struct {
++    unsigned char b[CH34X_FRAME_MAX];
++    unsigned len;
++    int overflow;
++} ch34x_frame_t;
++
++typedef struct {
++    ch34x_frame_t f[CH34X_MAX_FRAMES];
++    unsigned count;
++    int overflow;
++    ch34x_frame_t stub;
++} ch34x_frames_t;
++
++typedef struct {
++    const char* name;
++    unsigned write_frame_max;
++    unsigned out_payload_max;
++    unsigned read_cont_chunk;
++    unsigned read_head_in;
++    unsigned pid;
++    unsigned iface;
++    unsigned ep_out;
++    unsigned ep_in;
++    unsigned status_mode;
++} ch34x_profile_t;
++
++const ch34x_profile_t* ch34x_profile_by_name(const char* name);
++const ch34x_profile_t* ch34x_profile_by_pid(unsigned pid);
++
++void ch34x_build_combined_read(ch34x_frames_t* fs, const ch34x_profile_t* p,
++                               unsigned int slave, unsigned int cr, unsigned int n);
++void ch34x_build_write(ch34x_frames_t* fs, const ch34x_profile_t* p,
++                       unsigned int slave, unsigned int cr,
++                       const unsigned char* data, unsigned int len,
++                       const unsigned char* rmw_saved);
++unsigned ch34x_rmw_partial_dwords(unsigned int cr, unsigned int len,
++                                  unsigned int* dword_crs, unsigned int max_out);
++void ch34x_push_mwrite4(ch34x_frames_t* fs, unsigned int slave, unsigned int cr,
++                        const unsigned char* val4);
++void ch34x_build_probe(ch34x_frames_t* fs, unsigned int slave);
++void ch34x_build_set_speed(ch34x_frames_t* fs, unsigned int speed);
++int ch34x_frame_scan(const ch34x_frame_t* fr, unsigned int* out_n, unsigned int* in_n);
++
++#endif
+diff --git a/mtcr_ul/ch34x_usb.c b/mtcr_ul/ch34x_usb.c
+new file mode 100644
+index 0000000..943e661
+--- /dev/null
++++ b/mtcr_ul/ch34x_usb.c
+@@ -0,0 +1,627 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <errno.h>
++#include <time.h>
++#include "mtcr_ul_com.h"
++#include "ch34x_frames_core.h"
++
++#ifdef ENABLE_MST_DEV_I2C
++
++#include <libusb-1.0/libusb.h>
++
++#define CH34X_VID             0x1a86
++#define CH34X_USB_TIMEOUT_MS  2000
++#define CH34X_MAX_DEVS        16
++#define CH34X_MAX_WRITE_BYTES 64
++#define CH34X_MAX_READ_BYTES  64
++#define CH34X_FORCE_LOCK_CR   0xf0400
++#define CH34X_STATUS_ACK      0x01
++
++typedef struct {
++    libusb_context* libctx;
++    libusb_device_handle* uh;
++    const ch34x_profile_t* prof;
++    unsigned speed;
++    unsigned pause_ms;
++    int trace;
++    int force_lock;
++} ch34x_usb_ctx_t;
++
++typedef struct {
++    unsigned char bus;
++    unsigned char addr;
++    unsigned pid;
++    const ch34x_profile_t* prof;
++} ch34x_dev_ent_t;
++
++static void ch34x_sleep_ms(unsigned ms)
++{
++    struct timespec ts;
++
++    ts.tv_sec = ms / 1000;
++    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
++    nanosleep(&ts, NULL);
++}
++
++static void ch34x_env_init(ch34x_usb_ctx_t* c)
++{
++    const char* s;
++    char* end;
++    long v;
++
++    c->speed = 2;
++    c->pause_ms = 0;
++    c->trace = 0;
++    c->force_lock = 0;
++
++    s = getenv("MLXCH34X_SPEED");
++    if (s != NULL && *s != '\0')
++    {
++        v = strtol(s, &end, 0);
++        if (*end == '\0' && v >= 0 && v <= 3)
++        {
++            c->speed = (unsigned)v;
++        }
++        else
++        {
++            fprintf(stderr, "-W- MLXCH34X_SPEED: invalid value '%s' (want 0..3), using default %u\n", s, c->speed);
++        }
++    }
++
++    s = getenv("MLXCH34X_PAUSE_MS");
++    if (s != NULL && *s != '\0')
++    {
++        v = strtol(s, &end, 0);
++        if (*end == '\0' && v >= 0 && v <= 10000)
++        {
++            c->pause_ms = (unsigned)v;
++        }
++        else
++        {
++            fprintf(stderr, "-W- MLXCH34X_PAUSE_MS: invalid value '%s', using default %u\n", s, c->pause_ms);
++        }
++    }
++
++    s = getenv("MLXCH34X_TRACE");
++    if (s != NULL && strcmp(s, "frames") == 0)
++    {
++        c->trace = 1;
++    }
++
++    s = getenv("MLXCH34X_FORCE_LOCK");
++    if (s != NULL && strcmp(s, "1") == 0)
++    {
++        c->force_lock = 1;
 +    }
 +}
 +
-+int main(int argc, char** argv)
++static void ch34x_trace(const ch34x_usb_ctx_t* c, const char* dir, const unsigned char* b, unsigned n)
 +{
-+    static const unsigned char p16[16] = { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-+                                           0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f };
-+    static const unsigned char mwrite4_val[4] = { 0x12, 0x34, 0x56, 0x78 };
-+    static const unsigned char rmw_val[6] = { 0x12, 0x13, 0x14, 0x15, 0x16, 0x17 };
-+    const ch34x_profile_t* prof;
-+    const char* scenario;
-+    const char* profile = "ch347";
-+    ch34x_frames_t fs;
-+    unsigned int np;
-+    unsigned int i;
++    unsigned i;
 +
-+    if (argc < 2 || argc > 4)
++    if (!c->trace)
 +    {
-+        fprintf(stderr, "usage: ch34x_frames <scenario> [--profile ch347|ch341]\n");
-+        return 2;
++        return;
 +    }
-+    scenario = argv[1];
-+    if (argc == 4)
++    fprintf(stderr, "ch34x %s[%u]:", dir, n);
++    for (i = 0; i < n; i++)
 +    {
-+        if (strcmp(argv[2], "--profile") != 0)
++        fprintf(stderr, " %02x", b[i]);
++    }
++    fputc('\n', stderr);
++}
++
++static int ch34x_enum(libusb_context* libctx, ch34x_dev_ent_t* ents)
++{
++    libusb_device** list = NULL;
++    ssize_t nlist;
++    ssize_t i;
++    int n = 0;
++
++    nlist = libusb_get_device_list(libctx, &list);
++    if (nlist < 0)
++    {
++        return -1;
++    }
++    for (i = 0; i < nlist && n < CH34X_MAX_DEVS; i++)
++    {
++        struct libusb_device_descriptor d;
++        const ch34x_profile_t* prof;
++
++        if (libusb_get_device_descriptor(list[i], &d) != 0)
 +        {
-+            fprintf(stderr, "usage: ch34x_frames <scenario> [--profile ch347|ch341]\n");
-+            return 2;
++            continue;
 +        }
-+        profile = argv[3];
-+    }
-+
-+    np = sizeof(ch34x_profiles) / sizeof(ch34x_profiles[0]);
-+    prof = NULL;
-+    for (i = 0; i < np; i++)
-+    {
-+        if (strcmp(ch34x_profiles[i].name, profile) == 0)
++        if (d.idVendor != CH34X_VID)
 +        {
-+            prof = &ch34x_profiles[i];
++            continue;
++        }
++        prof = ch34x_profile_by_pid(d.idProduct);
++        if (prof == NULL)
++        {
++            continue;
++        }
++        ents[n].bus = libusb_get_bus_number(list[i]);
++        ents[n].addr = libusb_get_device_address(list[i]);
++        ents[n].pid = d.idProduct;
++        ents[n].prof = prof;
++        n++;
++    }
++    libusb_free_device_list(list, 1);
++    return n;
++}
++
++static void ch34x_list_adapters(const ch34x_dev_ent_t* ents, int n)
++{
++    int i;
++
++    for (i = 0; i < n; i++)
++    {
++        fprintf(stderr, "    ch34x:%x.%x (%s)\n", ents[i].bus, ents[i].addr, ents[i].prof->name);
++    }
++}
++
++static libusb_device_handle* ch34x_open_selected(libusb_context* libctx, const ch34x_dev_ent_t* e)
++{
++    libusb_device** list = NULL;
++    libusb_device_handle* h = NULL;
++    ssize_t nlist;
++    ssize_t i;
++    int found = 0;
++
++    nlist = libusb_get_device_list(libctx, &list);
++    if (nlist < 0)
++    {
++        return NULL;
++    }
++    for (i = 0; i < nlist; i++)
++    {
++        struct libusb_device_descriptor d;
++
++        if (libusb_get_device_descriptor(list[i], &d) == 0 && d.idVendor == CH34X_VID && d.idProduct == e->pid &&
++            libusb_get_bus_number(list[i]) == e->bus && libusb_get_device_address(list[i]) == e->addr)
++        {
++            if (libusb_open(list[i], &h) == 0)
++            {
++                found = 1;
++            }
 +            break;
 +        }
 +    }
-+    if (!prof)
++    libusb_free_device_list(list, 1);
++    return found ? h : NULL;
++}
++
++static int ch34x_claim(ch34x_usb_ctx_t* c)
++{
++    unsigned ifaces[3];
++    unsigned nif = 0;
++    unsigned i;
++
++    if (c->prof->iface == 2)
 +    {
-+        fprintf(stderr, "ch34x_frames: unknown profile '%s'\n", profile);
-+        return 2;
++        ifaces[nif++] = 0;
++        ifaces[nif++] = 1;
 +    }
++    ifaces[nif++] = c->prof->iface;
++
++    for (i = 0; i < nif; i++)
++    {
++        if (libusb_kernel_driver_active(c->uh, (int)ifaces[i]) == 1)
++        {
++            libusb_detach_kernel_driver(c->uh, (int)ifaces[i]);
++        }
++    }
++    return libusb_claim_interface(c->uh, (int)c->prof->iface);
++}
++
++static int ch34x_wedged(int rc)
++{
++    return rc == -7 || rc == -71 || rc == -110;
++}
++
++static int ch34x_recover(ch34x_usb_ctx_t* c)
++{
++    int rc;
++
++    libusb_release_interface(c->uh, (int)c->prof->iface);
++    rc = libusb_reset_device(c->uh);
++    if (rc == 0)
++    {
++        if (libusb_kernel_driver_active(c->uh, (int)c->prof->iface) == 1)
++        {
++            libusb_detach_kernel_driver(c->uh, (int)c->prof->iface);
++        }
++        rc = libusb_claim_interface(c->uh, (int)c->prof->iface);
++    }
++    return rc;
++}
++
++static int ch34x_bulk(ch34x_usb_ctx_t* c, unsigned char ep, unsigned char* buf, int len, int* xferred)
++{
++    int rc = libusb_bulk_transfer(c->uh, ep, buf, len, xferred, CH34X_USB_TIMEOUT_MS);
++
++    if (ch34x_wedged(rc) && ch34x_recover(c) == 0)
++    {
++        rc = libusb_bulk_transfer(c->uh, ep, buf, len, xferred, CH34X_USB_TIMEOUT_MS);
++    }
++    return rc;
++}
++
++static int ch34x_read_exact(ch34x_usb_ctx_t* c, unsigned want, unsigned char* buf)
++{
++    unsigned got = 0;
++
++    while (got < want)
++    {
++        int x = 0;
++
++        if (ch34x_bulk(c, c->prof->ep_in, buf + got, (int)(want - got), &x) != 0 || x <= 0)
++        {
++            return -1;
++        }
++        got += (unsigned)x;
++    }
++    return 0;
++}
++
++static int ch34x_exec_frames(ch34x_usb_ctx_t* c, ch34x_frames_t* fs, unsigned char* data_out, size_t expect)
++{
++    unsigned i;
++    size_t got = 0;
++
++    if (fs->overflow)
++    {
++        errno = EINVAL;
++        return -1;
++    }
++
++    for (i = 0; i < fs->count; i++)
++    {
++        ch34x_frame_t* fr = &fs->f[i];
++        unsigned int out_n = 0;
++        unsigned int in_n = 0;
++        unsigned char inb[CH34X_FRAME_MAX + CH34X_STM_N_MAX + 8];
++        unsigned int k;
++        int x = 0;
++
++        if (fr->overflow || ch34x_frame_scan(fr, &out_n, &in_n) != 0)
++        {
++            errno = EINVAL;
++            return -1;
++        }
++        if (i && c->pause_ms)
++        {
++            ch34x_sleep_ms(c->pause_ms);
++        }
++        ch34x_trace(c, "OUT", fr->b, fr->len);
++        if (ch34x_bulk(c, c->prof->ep_out, fr->b, (int)fr->len, &x) != 0 || x != (int)fr->len)
++        {
++            errno = EIO;
++            return -1;
++        }
++        if (c->prof->status_mode == CH34X_STATUS_PER_OUT_BYTE)
++        {
++            if (out_n + in_n == 0)
++            {
++                continue;
++            }
++            if (ch34x_read_exact(c, out_n + in_n, inb) != 0)
++            {
++                errno = EIO;
++                return -1;
++            }
++            ch34x_trace(c, "IN", inb, out_n + in_n);
++            for (k = 0; k < out_n; k++)
++            {
++                if (inb[k] != CH34X_STATUS_ACK)
++                {
++                    errno = EREMOTEIO;
++                    return -1;
++                }
++            }
++            if (in_n)
++            {
++                if (data_out == NULL || got + in_n > expect)
++                {
++                    errno = EREMOTEIO;
++                    return -1;
++                }
++                memcpy(data_out + got, inb + out_n, in_n);
++                got += in_n;
++            }
++        }
++        else
++        {
++            if (in_n)
++            {
++                if (data_out == NULL || got + in_n > expect)
++                {
++                    errno = EREMOTEIO;
++                    return -1;
++                }
++                if (ch34x_read_exact(c, in_n, data_out + got) != 0)
++                {
++                    errno = EIO;
++                    return -1;
++                }
++                ch34x_trace(c, "IN", data_out + got, in_n);
++                got += in_n;
++            }
++            else if (out_n)
++            {
++                int rc = libusb_bulk_transfer(c->uh, c->prof->ep_in, inb, (int)sizeof(inb), &x, CH34X_USB_TIMEOUT_MS);
++
++                if (rc == 0 && x > 0)
++                {
++                    ch34x_trace(c, "IN", inb, (unsigned)x);
++                    for (k = 0; k < (unsigned)x; k++)
++                    {
++                        if (inb[k] & 0x80)
++                        {
++                            errno = EREMOTEIO;
++                            return -1;
++                        }
++                    }
++                }
++                else if (rc != 0 && rc != -7)
++                {
++                    errno = EIO;
++                    return -1;
++                }
++            }
++        }
++    }
++
++    if (data_out != NULL && got != expect)
++    {
++        errno = EREMOTEIO;
++        return -1;
++    }
++    return 0;
++}
++
++static int ch34x_transact(mfile* mf, u_int8_t slave, const u_int8_t* w, size_t wlen, u_int8_t* r, size_t rlen)
++{
++    ch34x_usb_ctx_t* c;
++    ch34x_frames_t fs;
++    unsigned int cr;
++
++    if (mf == NULL || mf->i2c_bus_ctx == NULL)
++    {
++        errno = EINVAL;
++        return -1;
++    }
++    c = (ch34x_usb_ctx_t*)mf->i2c_bus_ctx;
++
++    if (rlen > CH34X_MAX_READ_BYTES)
++    {
++        errno = EINVAL;
++        return -1;
++    }
++    if (rlen > 0 && wlen != 4)
++    {
++        errno = EINVAL;
++        return -1;
++    }
++    if (rlen == 0 && (wlen < 5 || wlen - 4 > CH34X_MAX_WRITE_BYTES))
++    {
++        errno = EINVAL;
++        return -1;
++    }
++
++    cr = ((unsigned int)w[0] << 24) | ((unsigned int)w[1] << 16) | ((unsigned int)w[2] << 8) | (unsigned int)w[3];
 +
 +    memset(&fs, 0, sizeof(fs));
 +
-+    if (strcmp(scenario, "mread4") == 0)
++    if (rlen)
 +    {
-+        ch34x_build_combined_read(&fs, prof, CH34X_I2C_SLAVE, 0xf0014, 4);
++        ch34x_build_combined_read(&fs, c->prof, slave, cr, (unsigned int)rlen);
++        return ch34x_exec_frames(c, &fs, r, rlen);
 +    }
-+    else if (strcmp(scenario, "mwrite4") == 0)
++
 +    {
-+        ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0014, mwrite4_val, 4);
-+    }
-+    else if (strcmp(scenario, "read_block64") == 0)
-+    {
-+        ch34x_build_combined_read(&fs, prof, CH34X_I2C_SLAVE, 0xf0014, 64);
-+    }
-+    else if (strcmp(scenario, "write_block16_gw") == 0)
-+    {
-+        ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0410, p16, 16);
-+    }
-+    else if (strcmp(scenario, "write_block16_split") == 0)
-+    {
-+        for (i = 0; i < 4; i++)
++        unsigned int len = (unsigned int)wlen - 4;
++        unsigned int partial_crs[2];
++        unsigned int npartial;
++        unsigned char rmw_saved[CH34X_MAX_WRITE_BYTES + 8];
++
++        npartial = ch34x_rmw_partial_dwords(cr, len, partial_crs, 2);
++        if (npartial)
 +        {
-+            ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0410 + 4 * i, p16 + 4 * i, 4);
++            unsigned int d0 = cr & ~3U;
++            unsigned int j;
++            unsigned char saved4[4];
++
++            memset(rmw_saved, 0, sizeof(rmw_saved));
++            for (j = 0; j < npartial; j++)
++            {
++                memset(&fs, 0, sizeof(fs));
++                ch34x_build_combined_read(&fs, c->prof, slave, partial_crs[j], 4);
++                if (ch34x_exec_frames(c, &fs, saved4, 4) != 0)
++                {
++                    return -1;
++                }
++                memcpy(rmw_saved + (partial_crs[j] - d0) * 4, saved4, 4);
++            }
++            memset(&fs, 0, sizeof(fs));
++            ch34x_build_write(&fs, c->prof, slave, cr, w + 4, len, rmw_saved);
++        }
++        else
++        {
++            ch34x_build_write(&fs, c->prof, slave, cr, w + 4, len, NULL);
++        }
++        return ch34x_exec_frames(c, &fs, NULL, 0);
++    }
++}
++
++static void ch34x_bus_close(mfile* mf)
++{
++    ch34x_usb_ctx_t* c = mf ? (ch34x_usb_ctx_t*)mf->i2c_bus_ctx : NULL;
++
++    if (c == NULL)
++    {
++        return;
++    }
++    if (c->uh)
++    {
++        libusb_release_interface(c->uh, (int)c->prof->iface);
++        libusb_close(c->uh);
++    }
++    if (c->libctx)
++    {
++        libusb_exit(c->libctx);
++    }
++    free(c);
++    mf->i2c_bus_ctx = NULL;
++}
++
++int mtcr_ch34x_open(mfile* mf, const char* name)
++{
++    ch34x_usb_ctx_t* c;
++    ch34x_dev_ent_t ents[CH34X_MAX_DEVS];
++    unsigned int sel_bus = 0;
++    unsigned int sel_addr = 0;
++    int have_sel = 0;
++    int n;
++    int i;
++    int sel = -1;
++    ch34x_frames_t fs;
++
++    if (strcmp(name, "ch34x") != 0)
++    {
++        if (sscanf(name, "ch34x:%x.%x", &sel_bus, &sel_addr) != 2)
++        {
++            errno = EINVAL;
++            return -1;
++        }
++        have_sel = 1;
++    }
++
++    c = (ch34x_usb_ctx_t*)calloc(1, sizeof(*c));
++    if (c == NULL)
++    {
++        errno = ENOMEM;
++        return -1;
++    }
++    ch34x_env_init(c);
++
++    if (libusb_init(&c->libctx) != 0)
++    {
++        free(c);
++        errno = EIO;
++        return -1;
++    }
++
++    n = ch34x_enum(c->libctx, ents);
++    if (n < 0)
++    {
++        libusb_exit(c->libctx);
++        free(c);
++        errno = EIO;
++        return -1;
++    }
++    if (n == 0)
++    {
++        fprintf(stderr, "-E- no CH34x adapters found (lsusb | grep 1a86)\n");
++        libusb_exit(c->libctx);
++        free(c);
++        errno = ENODEV;
++        return -1;
++    }
++    if (have_sel)
++    {
++        for (i = 0; i < n; i++)
++        {
++            if (ents[i].bus == (unsigned char)sel_bus && ents[i].addr == (unsigned char)sel_addr)
++            {
++                sel = i;
++                break;
++            }
++        }
++        if (sel < 0)
++        {
++            fprintf(stderr, "-E- ch34x:%x.%x: adapter not found\n", sel_bus, sel_addr);
++            ch34x_list_adapters(ents, n);
++            libusb_exit(c->libctx);
++            free(c);
++            errno = ENODEV;
++            return -1;
 +        }
 +    }
-+    else if (strcmp(scenario, "probe_0x48") == 0)
++    else if (n == 1)
 +    {
-+        ch34x_build_probe(&fs, CH34X_I2C_SLAVE);
-+    }
-+    else if (strcmp(scenario, "set_speed_400k") == 0)
-+    {
-+        ch34x_build_set_speed(&fs, 2);
-+    }
-+    else if (strcmp(scenario, "write_unaligned_rm") == 0)
-+    {
-+        ch34x_build_write(&fs, prof, CH34X_I2C_SLAVE, 0xf0412, rmw_val, 6);
++        sel = 0;
 +    }
 +    else
 +    {
-+        fprintf(stderr, "ch34x_frames: unknown scenario '%s'\n", scenario);
-+        return 2;
++        fprintf(stderr, "-E- multiple CH34x adapters found, select one (ch34x:<bus>.<addr>):\n");
++        ch34x_list_adapters(ents, n);
++        libusb_exit(c->libctx);
++        free(c);
++        errno = ENODEV;
++        return -1;
 +    }
 +
-+    emit(&fs);
++    c->prof = ents[sel].prof;
++    c->uh = ch34x_open_selected(c->libctx, &ents[sel]);
++    if (c->uh == NULL)
++    {
++        fprintf(stderr, "-E- ch34x:%x.%x: failed to open USB device\n", ents[sel].bus, ents[sel].addr);
++        libusb_exit(c->libctx);
++        free(c);
++        errno = EACCES;
++        return -1;
++    }
++    if (ch34x_claim(c) != 0)
++    {
++        fprintf(stderr, "-E- ch34x:%x.%x: failed to claim interface %u\n",
++                ents[sel].bus, ents[sel].addr, c->prof->iface);
++        libusb_close(c->uh);
++        libusb_exit(c->libctx);
++        free(c);
++        errno = EBUSY;
++        return -1;
++    }
++
++    mf->i2c_bus_ctx = c;
++    mf->i2c_transact = ch34x_transact;
++    mf->i2c_bus_close = ch34x_bus_close;
++
++    memset(&fs, 0, sizeof(fs));
++    ch34x_build_set_speed(&fs, c->speed);
++    if (ch34x_exec_frames(c, &fs, NULL, 0) != 0)
++    {
++        fprintf(stderr, "-E- ch34x:%x.%x: failed to set i2c speed %u\n",
++                ents[sel].bus, ents[sel].addr, c->speed);
++        ch34x_bus_close(mf);
++        errno = EIO;
++        return -1;
++    }
++
++    if (c->force_lock)
++    {
++        static const unsigned char zero4[4] = { 0, 0, 0, 0 };
++
++        memset(&fs, 0, sizeof(fs));
++        ch34x_push_mwrite4(&fs, mf->i2c_secondary, CH34X_FORCE_LOCK_CR, zero4);
++        if (ch34x_exec_frames(c, &fs, NULL, 0) != 0)
++        {
++            fprintf(stderr, "-W- ch34x: MLXCH34X_FORCE_LOCK: write 0x%x=0 failed (%s), continuing\n",
++                    CH34X_FORCE_LOCK_CR, strerror(errno));
++        }
++    }
++
++    if (change_i2c_secondary_address(mf, mf->dtype))
++    {
++        fprintf(stderr, "-E- ch34x: failed to determine i2c secondary address (no ACK from 0x48/0x47)\n");
++        ch34x_bus_close(mf);
++        errno = EREMOTEIO;
++        return -1;
++    }
++
 +    return 0;
 +}
++
++#endif
 diff --git a/mtcr_ul/mtcr_ul_com.c b/mtcr_ul/mtcr_ul_com.c
-index 39c893b..b2e74e7 100644
+index 39c893b..d34a80a 100644
 --- a/mtcr_ul/mtcr_ul_com.c
 +++ b/mtcr_ul/mtcr_ul_com.c
 @@ -2621,39 +2621,56 @@ static inline int prepare_i2c_data(unsigned char* buf, DType dtype, u_int32_t of
@@ -581,47 +1493,16 @@ index 39c893b..b2e74e7 100644
          return rc;
      }
  
-@@ -2796,6 +2773,39 @@ void safe_free(mfile** pmf)
+@@ -2796,6 +2773,8 @@ void safe_free(mfile** pmf)
      }
  }
  
-+static int ch34x_transact(mfile* mf, u_int8_t slave, const u_int8_t* w, size_t wlen, u_int8_t* r, size_t rlen)
-+{
-+    (void)mf;
-+    (void)slave;
-+    (void)w;
-+    (void)wlen;
-+    (void)r;
-+    (void)rlen;
-+
-+    errno = ENOSYS;
-+    return -1;
-+}
-+
-+static int mtcr_ch34x_open(mfile* mf, const char* name)
-+{
-+    unsigned int bus = 0;
-+    unsigned int addr = 0;
-+
-+    if (strcmp(name, "ch34x") != 0 && sscanf(name, "ch34x:%x.%x", &bus, &addr) != 2)
-+    {
-+        errno = EINVAL;
-+        return -1;
-+    }
-+
-+    (void)bus;
-+    (void)addr;
-+
-+    mf->i2c_transact = ch34x_transact;
-+
-+    errno = ENOSYS;
-+    return -1;
-+}
++int mtcr_ch34x_open(mfile* mf, const char* name);
 +
  static int mtcr_i2c_open(mfile* mf, const char* name)
  {
      ul_ctx_t* ctx = mf->ul_ctx;
-@@ -2810,6 +2820,13 @@ static int mtcr_i2c_open(mfile* mf, const char* name)
+@@ -2810,6 +2789,13 @@ static int mtcr_i2c_open(mfile* mf, const char* name)
      ctx->mread4_block = (f_mread4_block)mtcr_i2c_mread_chunks;
      ctx->mwrite4_block = (f_mwrite4_block)mtcr_i2c_mwrite_chunks;
  
@@ -635,7 +1516,7 @@ index 39c893b..b2e74e7 100644
      if ((mf->fd = open(name, O_RDWR | O_SYNC)) < 0)
      {
          safe_free(&mf);
-@@ -3054,6 +3071,11 @@ static MType mtcr_parse_name(const char* name, int* force, unsigned* domain_p, u
+@@ -3054,6 +3040,11 @@ static MType mtcr_parse_name(const char* name, int* force, unsigned* domain_p, u
      {
          return MST_DEV_I2C;
      }
@@ -647,3 +1528,65 @@ index 39c893b..b2e74e7 100644
  #endif
  
  #ifdef ENABLE_VFIO
+@@ -4029,7 +4020,11 @@ mfile* mopen_ul_int(const char* name, u_int32_t adv_opt)
+     int err;
+     int rc;
+ 
++#ifdef ENABLE_MST_DEV_I2C
++    if (geteuid() != 0 && strstr(name, "ch34x") != name)
++#else
+     if (geteuid() != 0)
++#endif
+     {
+         errno = EACCES;
+         return NULL;
+@@ -4448,6 +4443,12 @@ int mclose_ul(mfile* mf)
+ {
+     if (mf != NULL)
+     {
++#ifdef ENABLE_MST_DEV_I2C
++        if (mf->i2c_bus_close)
++        {
++            mf->i2c_bus_close(mf);
++        }
++#endif
+         ul_ctx_t* ctx = mf->ul_ctx;
+         if (ctx)
+         {
+diff --git a/mvpd/Makefile.am b/mvpd/Makefile.am
+index 159148a..d51bc69 100644
+--- a/mvpd/Makefile.am
++++ b/mvpd/Makefile.am
+@@ -47,6 +47,6 @@ noinst_HEADERS = mvpd.h
+ 
+ ${RMVPD_SO}: libmvpd.la
+ 	$(CC) -g -Wall -pthread -shared ${CFLAGS} *.o -o ${RMVPD_SO} \
+-	 $(top_builddir)/${MTCR_CONF_DIR}/.libs/libmtcr_ul.a
++	 $(top_builddir)/${MTCR_CONF_DIR}/.libs/libmtcr_ul.a -lusb-1.0
+ 
+ CLEANFILES = ${RMVPD_SO}
+diff --git a/reg_access/Makefile.am b/reg_access/Makefile.am
+index b11adda..6b59363 100644
+--- a/reg_access/Makefile.am
++++ b/reg_access/Makefile.am
+@@ -61,6 +61,6 @@ dist_reg_access_pylib_DATA = regaccess.py regaccess_hca_ext_structs.py regaccess
+ 
+ ${RREG_ACCESS_SO}: libreg_access.la
+ 	$(CC) -g -Wall -pthread -shared ${CFLAGS} ${LDFLAGS} *.o -o ${RREG_ACCESS_SO} \
+-	$(top_builddir)/tools_layouts/.libs/libtools_layouts.a $(top_builddir)/${MTCR_CONF_DIR}/.libs/libmtcr_ul.a -lstdc++
++	$(top_builddir)/tools_layouts/.libs/libtools_layouts.a $(top_builddir)/${MTCR_CONF_DIR}/.libs/libmtcr_ul.a -lstdc++ -lusb-1.0
+ 
+ CLEANFILES = ${RREG_ACCESS_SO}
+diff --git a/resourcetools/resourcedump_lib/src/sdk/Makefile.am b/resourcetools/resourcedump_lib/src/sdk/Makefile.am
+index 9eada67..de5c235 100644
+--- a/resourcetools/resourcedump_lib/src/sdk/Makefile.am
++++ b/resourcetools/resourcedump_lib/src/sdk/Makefile.am
+@@ -82,7 +82,7 @@ resource_dump_sdk_so_DEPS = \
+     $(top_builddir)/dev_mgt/.libs/libdev_mgt.a \
+     $(MTCR_LIB) \
+     $(OFED_LIBS) \
+-    -lstdc++
++    -lstdc++ -lusb-1.0
+ 
+ # if !WIN_BUILD
+ libresource_dump_sdk.so: libresource_dump_sdk.la

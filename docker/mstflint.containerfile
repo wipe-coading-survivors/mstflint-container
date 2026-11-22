@@ -39,10 +39,11 @@ COPY mstflint-icon.png /opt/mstflint-icon.png
 # mstflint-ch34x-i2c-transport.patch (-1.5, mtusb-i2c-impl cycle) refactors
 # the mtcr i2c core onto bus ops: i2c_transact/i2c_bus_close fn pointers on
 # mfile, dev_i2c_transact carries the I2C_RDWR ioctl bodies of the four i2c
-# accessors verbatim, and a ch34x dispatch skeleton is added (mtcr_parse_name
-# ch34x prefix, mtcr_ch34x_open stub). Gates: ch34x_transact must be present
-# in mtcr_ul/mtcr_ul_com.c and the ch34x parse literal must land in the
-# binary.
+# accessors verbatim, and a full ch34x USB transport (libusb-1.0) lives in
+# mtcr_ul/ch34x_usb.c: adapter listing/dispatch, per-PID profiles, env knobs
+# and the four i2c accessors driven over bulk endpoints. Gates: the USB core
+# and its libusb include must be present in the tree and the ch34x parse
+# literal must land in the binary.
 RUN cd /src/mstflint \
     && patch -p1 < /src/mstflint-data-path-env.patch \
     && grep -q "MSTFLINT_DATA_PATH" mlxconfig/mlxcfg_commander.cpp \
@@ -59,7 +60,8 @@ RUN cd /src/mstflint \
     && grep -q "Set/query HW info" flint/subcommands.cpp \
     && ! grep -q -- "-DEXTERNAL" flint/Makefile.am \
     && patch -p1 < /src/mstflint-ch34x-i2c-transport.patch \
-    && grep -q "ch34x_transact" mtcr_ul/mtcr_ul_com.c \
+    && grep -q "ch34x_transact" mtcr_ul/ch34x_usb.c \
+    && grep -q "libusb-1.0/libusb.h" mtcr_ul/ch34x_usb.c \
     && ./autogen.sh \
     && CFLAGS="-O2 -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types" \
         CXXFLAGS="-O2 -Wno-error" \
@@ -102,6 +104,6 @@ LABEL org.opencontainers.image.revision="${MSTFLINT_SHA}" \
 COPY --from=builder /usr/local /usr/local
 COPY --from=builder /opt/mft-artifacts /opt/mft-artifacts
 
-RUN dnf install -y openssl zlib libxml2 libcurl xz-libs expat \
+RUN dnf install -y openssl zlib libxml2 libcurl xz-libs expat libusb1 \
         libibverbs libibmad libibumad infiniband-diags perftest \
     && dnf clean all
